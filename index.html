@@ -651,7 +651,7 @@ body.skin-dark .sf-multi-btn { background: var(--surface, #1c2333); color: var(-
 body.skin-dark .sf-multi-panel { background: var(--surface, #1c2333); border-color: var(--border, #52627a); }
 body.skin-dark .sf-opt { color: var(--text, #e6edf5); }
 body.skin-dark .sf-opt:hover { background: rgba(255,255,255,.08); }
-body.skin-dark .sf-opt.selected { background: rgba(91,155,213,.22); color: var(--mid, #8fc1ed); }
+body.skin-dark .sf-opt.selected { background: rgba(91,155,213,.22); color: var(--text, #e6edf5); }
 body.skin-dark .sf-group-title { color: var(--text-muted, #a0aec0); }
 .essay-topic-buttons { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
 .essay-topic-buttons .module-btn { flex:1; min-width:90px; padding:10px 16px; border:none; border-radius:12px; font-weight:bold; font-size:13px; cursor:pointer; background:#fff; color:var(--deep); box-shadow:0 1px 3px rgba(0,0,0,.06); text-align:center; }
@@ -1881,6 +1881,11 @@ body.tool-fs-open { overflow: hidden !important; position: fixed !important; wid
 #toolFullscreen .news-reader-meta .news-reader-sep { margin:0 8px; opacity:.5; }
 #toolFullscreen .news-reader-body { font-size:17px; line-height:1.85; color:var(--text,#1f2937); max-width:42em; margin:0 auto; word-break:break-word; overflow-wrap:anywhere; }
 #toolFullscreen .news-reader-body p { margin:0 0 1.1em; }
+/* [FIX 20261001] 阅读页选区：拖选时不再把正文两侧的空白区一起框住。
+   阅读页是「窄列正文居中于整屏容器」，两侧空白属于外层块容器（及其元素间空白文本节点），
+   拖选时浏览器会把外层块的行框一并绘制成选区。这里把选中范围收紧到文章本体。 */
+#toolFullscreen:has(.news-reader-shell) { -webkit-user-select:none; user-select:none; }
+#toolFullscreen:has(.news-reader-shell) .news-reader-article { -webkit-user-select:text; user-select:text; }
 #toolFullscreen .news-reader-body h2 { margin:1.6em 0 .7em; font-size:1.25em; line-height:1.4; color:var(--main,#1e3a5f); }
 #toolFullscreen .news-reader-body h3 { margin:1.4em 0 .6em; font-size:1.12em; line-height:1.4; color:var(--main,#1e3a5f); }
 #toolFullscreen .news-reader-body h4 { margin:1.2em 0 .5em; font-size:1.02em; }
