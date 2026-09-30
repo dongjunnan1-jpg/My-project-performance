@@ -1251,8 +1251,30 @@ body.skin-dark .q-chat-input textarea { background:var(--surface-muted) !importa
 body.skin-dark .header-pp .pp-card:first-child .pp-label, body.skin-dark .header-pp .pp-card:first-child .pp-value, body.skin-dark .header-pp .pp-card:first-child #dailyStatus { color:var(--text) !important; }
 body.skin-dark .btn-primary { background:var(--deep) !important; color:var(--on-main) !important; }
 body.skin-dark .btn-primary:hover { background:var(--main) !important; color:var(--on-main) !important; }
-body.skin-dark .btn-outline { background:var(--surface) !important; color:var(--text) !important; border-color:var(--border) !important; }
-body.skin-dark .btn-outline:hover { background:var(--surface-muted) !important; color:var(--text) !important; }
+body.skin-dark .btn-outline:not([onclick*="clearFilters"]):not(#uploadButton) { background:var(--surface) !important; color:var(--text) !important; border-color:var(--border) !important; }   /* [FIX 20261001c] 排除筛选栏「✕ 清除筛选」与上传区「📁 上传」——这两个按钮须与同区 select 统一为白底 + #ccc/#999 边框 */
+body.skin-dark .btn-outline:hover:not([onclick*="clearFilters"]):not(#uploadButton) { background:var(--surface-muted) !important; color:var(--text) !important; }
+
+/* [FIX 20261001c] 筛选栏「✕ 清除筛选」/ 上传区「📁 上传」：全皮肤下与同区 select/input 配色一致
+   问题：① body.skin-dark .btn-outline 把这两个按钮覆写成「深底 #1c2333 + 浅字 + 蓝灰边框」，
+            使它们成为区域内唯一的深色控件（该覆写已在上面用 :not() 排除这两者）；
+         ② .btn-outline 的 color:var(--accent-text) 在 skin-eye(#2f6b3f 绿) /
+            skin-shenburen(#7a5c00 橄榄) 下与同区 select 的 var(--deep) 不一致。
+   此处统一为「白底 + var(--deep) 文字」，边框沿用各区既有规则
+   （筛选栏 1px #ccc / 上传区 2px #999），不改任何尺寸、间距与位置。 */
+body .filter-bar button[onclick*="clearFilters"],
+body .upload-zone #uploadButton {
+    background: #fff !important;
+    color: var(--deep) !important;
+    box-shadow: none !important;
+}
+body .filter-bar button[onclick*="clearFilters"]:hover,
+body .upload-zone #uploadButton:hover {
+    background: #fff !important;
+    color: var(--deep) !important;
+    border-color: var(--main) !important;
+    box-shadow: none !important;
+}
+
 body.skin-dark #progressPanel .pp-card:first-child #dailyGoalInput,
 body.skin-dark #progressPanel .pp-card:first-child #dailyGoalInput:focus,
 body.skin-dark #progressPanel .pp-card:first-child .daily-reset-btn,
@@ -14325,7 +14347,7 @@ if (window.innerWidth <= 768) {
     if (fileList && selectBtn) {
         var toggleBtn = document.createElement('button');
         toggleBtn.textContent = '📄文件';
-        toggleBtn.style.cssText = 'padding:1px 3px;font-size:10px;border-radius:4px;cursor:pointer;border:1px solid #ccc;background:#fff;min-height:20px;';
+        toggleBtn.style.cssText = 'padding:1px 3px;font-size:10px;border-radius:4px;cursor:pointer;border:1px solid #ccc;background:#fff;min-height:20px;color:var(--deep);';   /* [FIX 20261001c] 文字色与同区 select 统一 */
         toggleBtn.type = 'button';
 toggleBtn.onclick = function(e) {
     e.preventDefault();
