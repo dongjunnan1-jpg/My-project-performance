@@ -204,7 +204,7 @@
     min-height: 44px !important;
     height: 44px !important;
     font-size: 11px !important;
-    border: 2px solid var(--light) !important;
+    border: 1px solid #ccc !important;   /* [FIX 20261001b] 与 .filter-bar select 统一：1px #ccc */
     border-radius: 6px !important;
     box-sizing: border-box !important;
     padding: 7px 4px !important;
@@ -649,7 +649,7 @@ html, body { width:100%; max-width:100%; margin:0; padding:0; box-sizing:border-
 .sf-opt.selected { background: var(--light, #eef4fc); color: var(--deep, #3a7ab0); font-weight: 700; }
 .sf-opt.selected::before { content: '✓'; }
 /* 深色主题适配 */
-body.skin-dark .sf-multi-btn { background: var(--surface, #1c2333); color: var(--text, #e6edf5); border-color: var(--border, #52627a); }
+/* [FIX 20261001b] 暗夜下取消 .sf-multi-btn 的单独覆写：.filter-bar 内其它控件（select / input#sourceFilter / 清除筛选按钮）均为「白底 + --deep 文字 + 1px #ccc 边框」，单独覆写深底浅字会让「默认顺序」成为栏内唯一的深色控件，颜色明显不一致。 */
 body.skin-dark .sf-multi-panel { background: var(--surface, #1c2333); border-color: var(--border, #52627a); }
 body.skin-dark .sf-opt { color: var(--text, #e6edf5); }
 body.skin-dark .sf-opt:hover { background: rgba(255,255,255,.08); }
