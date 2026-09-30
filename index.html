@@ -3573,7 +3573,7 @@ async function exportEnglishBackup(){
     const statsInfo={totalWords:Object.keys(vocabulary||{}).length,totalArticles:(articles||[]).length,totalGrammarBooks:(grammarBooks||[]).length,totalGroups:(groups||[]).length};
     const backup={_type:'helium_english_backup_v1',version:1,exportTime:new Date().toISOString(),stats:statsInfo,data:{articles:articles||[],vocabulary:vocabulary||{},vocabFiles:vocabFiles||[],groups:groups||[],grammarBooks:grammarBooks||[],reviewState:reviewState||{history:{}},stats:stats||{}}};
     const backupStr=JSON.stringify(backup),fileSizeKB=Math.round(backupStr.length/1024),fileSizeMB=(backupStr.length/1048576).toFixed(2),sizeText=fileSizeKB>1024?fileSizeMB+' MB':fileSizeKB+' KB';
-    showConfirm('将导出英语学习数据：\n  📚 单词 '+statsInfo.totalWords+' 个\n  📖 文章 '+statsInfo.totalArticles+' 篇\n  📘 教材 '+statsInfo.totalGrammarBooks+' 本\n  📂 词组 '+statsInfo.totalGroups+' 组\n  （约 '+sizeText+'）\n\n确认继续？',function(){downloadJSON(backup,'Helium英语备份_'+new Date().toISOString().slice(0,10)+'.json');alert('✅ 英语备份导出成功！');});
+    showConfirm('将导出英语学习数据：\n  📚 单词 '+statsInfo.totalWords+' 个\n  📖 文章 '+statsInfo.totalArticles+' 篇\n  📘 教材 '+statsInfo.totalGrammarBooks+' 本\n  📂 词组 '+statsInfo.totalGroups+' 组\n  （约 '+sizeText+'）\n\n确认继续？',function(){downloadJSON(backup,'Turbo-Helium英语备份_'+new Date().toISOString().slice(0,10)+'.json');alert('✅ 英语备份导出成功！');});
   }catch(e){ alert('❌ 导出失败：'+e.message); }
 }
 
@@ -11697,7 +11697,7 @@ async function exportBackup(){
   // 弹出确认框
   const confirmMsg = `将导出 ${totalAnswered} 道做过的题目，含 ${chatCount} 条AI对话记录、${noteCount} 条题目心得（约 ${fileSize} KB），确认继续？`;
   showConfirm(confirmMsg, () => {
-    downloadJSON(backup, 'Helium题库_做题备份_' + new Date().toISOString().slice(0, 10) + '.json');
+    downloadJSON(backup, 'Turbo-Helium题库_做题备份_' + new Date().toISOString().slice(0, 10) + '.json');
     alert(`✅ 备份导出成功！已导出 ${totalAnswered} 道题目的做题记录，含 ${chatCount} 条AI对话记录、${noteCount} 条题目心得。`);
     // C2-B：备份是「用完即放」的重操作，导出完成即释放三分区正文。
     ZONE_IDS.forEach(function(z){ releaseZoneBodies(z); });
