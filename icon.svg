@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" width="180" height="180" role="img" aria-label="turbo-junan">
+  <title>turbo-junan</title>
+  <defs>
+    <linearGradient id="tjbg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16223c"/>
+      <stop offset="0.55" stop-color="#0a1120"/>
+      <stop offset="1" stop-color="#04070d"/>
+    </linearGradient>
+    <radialGradient id="tjsheen" cx="0.32" cy="0.16" r="0.9">
+      <stop offset="0" stop-color="#2f5590" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#2f5590" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tjbook" gradientUnits="userSpaceOnUse" x1="52" y1="34" x2="130" y2="140">
+      <stop offset="0" stop-color="#a9e2ff"/>
+      <stop offset="0.45" stop-color="#5cb4ff"/>
+      <stop offset="1" stop-color="#2fd0c4"/>
+    </linearGradient>
+    <filter id="tjglow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="5" result="tjb"/>
+      <feMerge>
+        <feMergeNode in="tjb"/>
+        <feMergeNode in="tjb"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="tjclip">
+      <rect x="0" y="0" width="180" height="180" rx="40"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#tjclip)">
+    <rect x="0" y="0" width="180" height="180" fill="url(#tjbg)"/>
+    <rect x="0" y="0" width="180" height="180" fill="url(#tjsheen)"/>
+  </g>
+  <rect x="0.75" y="0.75" width="178.5" height="178.5" rx="39.25" fill="none" stroke="#2b3f60" stroke-width="1.5"/>
+
+  <g filter="url(#tjglow)">
+    <path fill="url(#tjbook)" d="M 90 58 C 72 48 48 50 32 58 L 32 132 C 48 124 72 122 90 132 C 108 122 132 124 148 132 L 148 58 C 132 50 108 48 90 58 Z"/>
+  </g>
+  <path d="M 90 58 L 90 132" stroke="#08101c" stroke-width="2" opacity="0.4" fill="none"/>
+  <path d="M 96 70 L 79 92 L 89 92 L 84 110 L 101 88 L 91 88 Z" fill="#060b14"/>
+</svg>
