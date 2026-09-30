@@ -1,0 +1,14 @@
+node_modules/
+.DS_Store
+My project.code-workspace
+辅助工具/
+
+# 本地回退备份（保留在磁盘，不纳入版本控制）
+*.bak-*
+index.html.bak*
+
+# 计划分支备份 / 差异文件
+index.html.broken-*
+*.bak
+*.diff
+index.html.broken-20260926
