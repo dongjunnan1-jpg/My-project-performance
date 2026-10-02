@@ -13572,8 +13572,48 @@ async function sendChatMessage(key) {
   });
   renderChatBox(key, messages);
   scrollChatToBottom(key);
+  var aiOptions = [];
+  try {
+    var optionsResult = getOptions(item);
+    if (Array.isArray(optionsResult)) aiOptions = optionsResult;
+  } catch(e) {
+    aiOptions = [];
+  }
+  var aiOptionLabels = ['A', 'B', 'C', 'D', 'E', 'F'];
+  var aiOptionsText = aiOptions.map(function(option, index){
+    var value = option;
+    if(option && typeof option === 'object'){
+      value = option.text || option.content || option.value || option.label || option.name || '';
+    }
+    return aiOptionLabels[index] ? aiOptionLabels[index] + '. ' + String(value == null ? '' : value) : '';
+  }).filter(Boolean).join('  ');
+  var aiCorrectAnswer = '';
+  try {
+    var correctResult = getCorrectLetter(item);
+    aiCorrectAnswer = Array.isArray(correctResult) ? correctResult.join(',') : String(correctResult == null ? '' : correctResult);
+  } catch(e) {
+    aiCorrectAnswer = '';
+  }
+  var aiMaterialParts = [];
+  [item.material, item._materials].forEach(function(source){
+    if(!source) return;
+    var materials = Array.isArray(source) ? source : [source];
+    materials.forEach(function(material){
+      var value = material;
+      if(material && typeof material === 'object'){
+        value = material.content || material.text || material.value || '';
+      }
+      if(value != null && value !== '') aiMaterialParts.push(String(value));
+    });
+  });
+  var aiSystemPrompt = '你是公考辅导老师。直接、简洁、精准回答，不重复题目，不说废话。回答100字以内。' +
+    '\n题目：' + String(item.content == null ? '' : item.content).substring(0, 500) +
+    '\n选项：' + aiOptionsText +
+    '\n正确答案：' + aiCorrectAnswer +
+    '\n解析：' + String(item.solution == null ? '' : item.solution).substring(0, 2000) +
+    '\n材料：' + aiMaterialParts.join('\n').substring(0, 2000);
   const aiMessages = [
-    {role: 'system', content: '你是公考辅导老师。直接、简洁、精准回答，不重复题目，不说废话。回答100字以内。\n题目：' + (item.content || '').substring(0,500) + '\n答案：' + (item.correctAnswer || item.answer || '') + '\n解析：' + (item.solution || '').substring(0,2000)}
+    {role: 'system', content: aiSystemPrompt.substring(0, 4000)}
   ];
   messages.slice(-4).forEach(function(m){
     const entry = {role: m.role, content: m.content};
