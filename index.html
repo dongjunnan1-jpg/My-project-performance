@@ -3243,7 +3243,7 @@ async function enPasteArticle(){ const text=prompt('请粘贴英文文章（点�
 async function enAddArticle(title,content){ const articles=await enGetArticles(); const article={id:'a_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),title:title,content:content,createdAt:Date.now(),parsed:null}; articles.unshift(article); await enSetArticles(articles); await enRenderFileList('reading'); await enParseArticle(article.id); }
 async function enRenderArticleList(){return enRenderFileList('reading');}
 async function enDeleteArticle(id){return enDeleteFile('reading',id);}
-async function enParseArticle(id){ const articles=await enGetArticles(), article=articles.find(function(a){return a.id===id;}), area=document.getElementById('enArticleParseArea'); if(!article||!area)return; if(article.parsed){enRenderParsed(article);return;} if(!aiConfig.apiKey){area.innerHTML='<div style="color:#dc2626;padding:20px;">请先配置 AI API Key</div>';return;} const ep=AI_ENDPOINTS[aiConfig.provider]; if(!ep){area.innerHTML='<div style="color:#dc2626;padding:20px;">未知 AI 服务商</div>';return;} area.innerHTML='<div style="padding:20px;text-align:center;">⏳ AI 正在解析...</div>'; try{const response=await axios({method:'post',url:ep.url,headers:{'Content-Type':'application/json','Authorization':'Bearer '+aiConfig.apiKey},data:{model:aiConfig.model||ep.model,messages:[{role:'system',content:'你是英语语法专家。请将文章按句切分，输出 JSON：{"sentences":[{"text":"原句","svoc":{"s":"","v":"","o":"","c":""},"slash":"意群/划分","tokens":[{"word":"cat","pos":"n.","meaning":"猫","difficulty":"高中"}]}]}。只输出 JSON。'},{role:'user',content:article.content.substring(0,3000)}],temperature:.3,max_tokens:4000},timeout:60000,proxy:false}); const text=response.data.choices[0].message.content,jsonMatch=text.match(/\{[\s\S]*\}/); if(!jsonMatch)throw new Error('AI 未返回有效 JSON'); article.parsed=JSON.parse(jsonMatch[0]); const all=await enGetArticles(),index=all.findIndex(function(a){return a.id===id;}); if(index>=0)all[index]=article; await enSetArticles(all); await enExtractVocabularyFromParsed(article.parsed); enRenderParsed(article); }catch(e){area.innerHTML='<div style="color:#dc2626;padding:20px;">❌ AI 解析失败：'+escapeHtml(e.message)+'</div>';} }
+async function enParseArticle(id){ const articles=await enGetArticles(), article=articles.find(function(a){return a.id===id;}), area=document.getElementById('enArticleParseArea'); if(!article||!area)return; if(article.parsed){enRenderParsed(article);return;} if(!aiConfig.apiKey){area.innerHTML='<div style="color:#dc2626;padding:20px;">请先配置 AI API Key</div>';return;} const ep=AI_ENDPOINTS[aiConfig.provider]; if(!ep){area.innerHTML='<div style="color:#dc2626;padding:20px;">未知 AI 服务商</div>';return;} area.innerHTML='<div style="padding:20px;text-align:center;">⏳ AI 正在解析...</div>'; try{const response=await axios({method:'post',url:ep.url,headers: aiAuthHeaders(),data:{model:aiConfig.model||ep.model,messages:[{role:'system',content:'你是英语语法专家。请将文章按句切分，输出 JSON：{"sentences":[{"text":"原句","svoc":{"s":"","v":"","o":"","c":""},"slash":"意群/划分","tokens":[{"word":"cat","pos":"n.","meaning":"猫","difficulty":"高中"}]}]}。只输出 JSON。'},{role:'user',content:article.content.substring(0,3000)}],temperature:.3,max_tokens:4000},timeout:60000,proxy:false}); const text=response.data.choices[0].message.content,jsonMatch=text.match(/\{[\s\S]*\}/); if(!jsonMatch)throw new Error('AI 未返回有效 JSON'); article.parsed=JSON.parse(jsonMatch[0]); const all=await enGetArticles(),index=all.findIndex(function(a){return a.id===id;}); if(index>=0)all[index]=article; await enSetArticles(all); await enExtractVocabularyFromParsed(article.parsed); enRenderParsed(article); }catch(e){area.innerHTML='<div style="color:#dc2626;padding:20px;">❌ AI 解析失败：'+escapeHtml(e.message)+'</div>';} }
 function enRenderParsed(article){ const area=document.getElementById('enArticleParseArea'); if(!area)return; let html='<div class="en-parsed-title">📖 '+escapeHtml(article.title)+'</div><div class="en-parsed-body">'; (article.parsed.sentences||[]).forEach(function(sent){html+='<div class="en-sentence"><div class="en-sentence-slash">'+escapeHtml(sent.slash||sent.text)+'</div>'; if(sent.svoc)html+='<div class="en-svoc">【主干】主：'+escapeHtml(sent.svoc.s||'')+'　谓：'+escapeHtml(sent.svoc.v||'')+'　宾：'+escapeHtml(sent.svoc.o||'')+'　补：'+escapeHtml(sent.svoc.c||'')+'</div>'; if(sent.tokens&&sent.tokens.length){html+='<div class="en-tokens">'; sent.tokens.forEach(function(t){const cls=t.difficulty==='高中'?'lv-hs':t.difficulty==='四级'?'lv-c4':t.difficulty==='六级'?'lv-c6':'lv-easy'; html+='<span class="en-token '+cls+'" title="'+escapeHtml((t.pos||'')+' '+(t.meaning||''))+'">'+escapeHtml(t.word||'')+(t.meaning&&t.difficulty!=='初中'?'<em class="en-token-meaning">'+escapeHtml(t.meaning)+'</em>':'')+'</span> ';}); html+='</div>';} html+='</div>';}); area.innerHTML=html+'</div>'; }
 async function enExtractVocabularyFromParsed(parsed){ const vocab=await enGetVocabulary(); let changed=false; (parsed.sentences||[]).forEach(function(s){(s.tokens||[]).forEach(function(t){if(t.word&&t.meaning&&t.difficulty!=='初中'){const key=t.word.toLowerCase();if(!vocab[key]){vocab[key]={meaning:t.meaning,pos:t.pos||'',difficulty:t.difficulty||'',mastered:false,wrongCount:0,createdAt:Date.now()};changed=true;}}});}); if(changed)await enSetVocabulary(vocab); }
 
@@ -3507,7 +3507,7 @@ async function enLoadWordAIDetail(word) {
     const response = await axios({
       method: 'post',
       url: ep.url,
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + aiConfig.apiKey },
+      headers: aiAuthHeaders(),
       data: {
         model: aiConfig.model || ep.model,
         messages: [
@@ -3561,7 +3561,7 @@ async function enRenderVocabList(keyword){
 }
 async function enChangeVocabPage(page){if(!window.__enDetailView||window.__enDetailView.moduleType!=='vocabulary')return;window.__enDetailView.page=page;await enRenderVocabList((document.getElementById('enVocabSearch')||{}).value||'');}
 async function enVocabSearchChanged(keyword){if(window.__enDetailView&&window.__enDetailView.moduleType==='vocabulary')window.__enDetailView.page=1;await enRenderVocabList(keyword);}
-async function enAggregateGroups(){ const vocab=await enGetVocabulary(),words=Object.keys(vocab);if(words.length<4){alert('词库太少（至少 4 个词）');return;}if(!aiConfig.apiKey){alert('请先配置 AI API Key');return;}const ep=AI_ENDPOINTS[aiConfig.provider],stats=document.getElementById('enVocabStats');if(!ep)return;if(stats)stats.innerHTML='<div style="padding:12px;text-align:center;">🔗 AI 正在聚类...</div>';try{const response=await axios({method:'post',url:ep.url,headers:{'Content-Type':'application/json','Authorization':'Bearer '+aiConfig.apiKey},data:{model:aiConfig.model||ep.model,messages:[{role:'system',content:'请将英文单词按语义聚类，输出 JSON 数组：[ {"name":"情感","emoji":"😊","words":["happy"]} ]，只输出 JSON。'},{role:'user',content:words.slice(0,100).join(', ')}],temperature:.3,max_tokens:2000},timeout:60000,proxy:false});const match=response.data.choices[0].message.content.match(/\[[\s\S]*\]/);if(!match)throw new Error('AI 未返回有效 JSON');const groups=JSON.parse(match[0]).map(function(g,i){return{id:'g_'+Date.now()+'_'+i,name:g.name,emoji:g.emoji||'📁',words:g.words||[]};});groups.forEach(function(g){g.words.forEach(function(w){if(vocab[w.toLowerCase()])vocab[w.toLowerCase()].groupId=g.id;});});await enSetGroups(groups);await enSetVocabulary(vocab);alert('✅ 聚合完成，共 '+groups.length+' 组');await enRenderFileList('vocabulary');}catch(e){alert('AI 聚合失败：'+e.message);await enRenderFileList('vocabulary');} }
+async function enAggregateGroups(){ const vocab=await enGetVocabulary(),words=Object.keys(vocab);if(words.length<4){alert('词库太少（至少 4 个词）');return;}if(!aiConfig.apiKey){alert('请先配置 AI API Key');return;}const ep=AI_ENDPOINTS[aiConfig.provider],stats=document.getElementById('enVocabStats');if(!ep)return;if(stats)stats.innerHTML='<div style="padding:12px;text-align:center;">🔗 AI 正在聚类...</div>';try{const response=await axios({method:'post',url:ep.url,headers: aiAuthHeaders(),data:{model:aiConfig.model||ep.model,messages:[{role:'system',content:'请将英文单词按语义聚类，输出 JSON 数组：[ {"name":"情感","emoji":"😊","words":["happy"]} ]，只输出 JSON。'},{role:'user',content:words.slice(0,100).join(', ')}],temperature:.3,max_tokens:2000},timeout:60000,proxy:false});const match=response.data.choices[0].message.content.match(/\[[\s\S]*\]/);if(!match)throw new Error('AI 未返回有效 JSON');const groups=JSON.parse(match[0]).map(function(g,i){return{id:'g_'+Date.now()+'_'+i,name:g.name,emoji:g.emoji||'📁',words:g.words||[]};});groups.forEach(function(g){g.words.forEach(function(w){if(vocab[w.toLowerCase()])vocab[w.toLowerCase()].groupId=g.id;});});await enSetGroups(groups);await enSetVocabulary(vocab);alert('✅ 聚合完成，共 '+groups.length+' 组');await enRenderFileList('vocabulary');}catch(e){alert('AI 聚合失败：'+e.message);await enRenderFileList('vocabulary');} }
 
 // ===== 英语模块：语法教材 =====
 function enParseChapters(text){const lines=text.split(/\r?\n/),chapters=[];let current=null,buffer=[];function flush(){if(current){current.content=buffer.join('\n').trim();chapters.push(current);}buffer=[];}lines.forEach(function(line){const m=line.match(/^(#{1,3})\s+(.+)$/);if(m){flush();current={id:'c_'+Date.now()+'_'+chapters.length,level:m[1].length,title:m[2].trim(),content:''};}else if(current)buffer.push(line);});flush();if(!chapters.length)chapters.push({id:'c_'+Date.now(),level:1,title:'正文',content:text.trim()});return chapters;}
@@ -13045,11 +13045,59 @@ const AI_HISTORY_STORE='chats';
 let aiHistoryDb=null;
 let aiConfig={provider:'', apiKey:'', model:'', enableSearch:false};
 const AI_ENDPOINTS={
-  deepseek:{url:'https://api.deepseek.com/chat/completions', model:'deepseek-flash'},
-  qwen:{url:'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model:'qwen-turbo'},
-  zhipu:{url:'https://open.bigmodel.cn/api/paas/v4/chat/completions', model:'glm-4-flash'},
-  openai:{url:'https://api.openai.com/v1/chat/completions', model:'gpt-4o-mini'}
+  deepseek:{
+    url:'https://api.deepseek.com/chat/completions',
+    model:'deepseek-chat',
+    authType:'bearer'
+  },
+  gemini:{
+    url:'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+    model:'gemini-3.8-flash',
+    authType:'gemini'
+  },
+  zhipu:{
+    url:'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+    model:'glm-4-flash',
+    authType:'bearer'
+  },
+  qwen:{
+    url:'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+    model:'qwen-turbo',
+    authType:'bearer'
+  },
+  siliconflow:{
+    url:'https://api.siliconflow.cn/v1/chat/completions',
+    model:'Qwen/Qwen2.5-7B-Instruct',
+    authType:'bearer'
+  },
+  openrouter:{
+    url:'https://openrouter.ai/api/v1/chat/completions',
+    model:'deepseek/deepseek-chat-v3.1:free',
+    authType:'bearer',
+    extraHeaders:{'HTTP-Referer':'https://turbo-helium.local','X-Title':'Turbo Helium'}
+  },
+  openai:{
+    url:'https://api.openai.com/v1/chat/completions',
+    model:'gpt-4o-mini',
+    authType:'bearer'
+  }
 };
+function aiAuthHeaders(){
+  var key = aiConfig.apiKey || '';
+  var provider = aiConfig.provider;
+  var ep = AI_ENDPOINTS[provider];
+  var headers = {'Content-Type':'application/json'};
+
+  if(key) headers['Authorization'] = 'Bearer ' + key;
+  if(ep && ep.authType === 'gemini' && key) headers['x-goog-api-key'] = key;
+
+  if(ep && ep.extraHeaders){
+    Object.keys(ep.extraHeaders).forEach(function(k){
+      headers[k] = ep.extraHeaders[k];
+    });
+  }
+  return headers;
+}
 // 中转接口地址（部署后替换为真实地址；留空则直接走直连）
 const AI_PROXY_URL = 'https://你的中转接口地址';
 // 新闻抓取 Worker（用于把新闻网页 URL 抓成纯文本，喂给 AI 简化）
@@ -13107,7 +13155,7 @@ async function requestAI(payload){
   return await axiosWithRetry({
     method: 'post',
     url: ep.url,
-    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + aiConfig.apiKey},
+    headers: aiAuthHeaders(),
     data: {
       model: payload.model || ep.model,
       messages: payload.messages,
@@ -13123,17 +13171,52 @@ async function requestAI(payload){
 function loadAIConfig(){
   try{ const r=localStorage.getItem(AI_KEY); if(r) aiConfig=JSON.parse(r); }catch(e){}
   if(!aiConfig||typeof aiConfig!=='object') aiConfig={provider:'',apiKey:'',model:'',enableSearch:false};
+  if(!aiConfig.providerConfigs||typeof aiConfig.providerConfigs!=='object'||Array.isArray(aiConfig.providerConfigs)) aiConfig.providerConfigs={};
   aiConfig.enableSearch = !!aiConfig.enableSearch;
   aiConfig.enableThinking = !!aiConfig.enableThinking;
-  const p=document.getElementById('aiProvider'); if(p && aiConfig.provider) p.value=aiConfig.provider;
-  const k=document.getElementById('aiKey'); if(k) k.value=aiConfig.apiKey||'';
-  const m=document.getElementById('aiModel'); if(m) m.value=aiConfig.model||'';
+  const p=document.getElementById('aiProvider');
+  const provider=aiConfig.provider||(p&&p.value)||'';
+  if(provider&&!aiConfig.providerConfigs[provider]&&(aiConfig.apiKey||aiConfig.model)){
+    aiConfig.providerConfigs[provider]={apiKey:aiConfig.apiKey||'',model:aiConfig.model||''};
+  }
+  aiConfig.provider=provider;
+  const providerConfig=aiConfig.providerConfigs[provider]||{};
+  aiConfig.apiKey=providerConfig.apiKey||'';
+  aiConfig.model=providerConfig.model||'';
+  if(p){
+    p.value=provider;
+    p.addEventListener('change',handleAIProviderChange);
+  }
+  const k=document.getElementById('aiKey'); if(k) k.value=aiConfig.apiKey;
+  const m=document.getElementById('aiModel'); if(m) m.value=aiConfig.model;
   const toggle=document.getElementById('aiSearchToggle');
   if(toggle) toggle.checked = aiConfig.enableSearch || false;
   const thinkingToggle=document.getElementById('aiThinkingToggle');
   if(thinkingToggle) thinkingToggle.checked = !!aiConfig.enableThinking;
 }
 function saveAIConfig(){ try{ localStorage.setItem(AI_KEY, JSON.stringify(aiConfig)); }catch(e){} }
+function saveCurrentAIProviderConfig(){
+  const provider=aiConfig.provider;
+  if(!provider) return;
+  const key=(document.getElementById('aiKey').value||'').trim();
+  const model=(document.getElementById('aiModel').value||'').trim();
+  aiConfig.providerConfigs=aiConfig.providerConfigs||{};
+  aiConfig.providerConfigs[provider]={apiKey:key,model:model};
+  aiConfig.apiKey=key;
+  aiConfig.model=model;
+}
+function handleAIProviderChange(){
+  const p=document.getElementById('aiProvider');
+  if(!p) return;
+  saveCurrentAIProviderConfig();
+  aiConfig.provider=p.value;
+  const providerConfig=aiConfig.providerConfigs[aiConfig.provider]||{};
+  aiConfig.apiKey=providerConfig.apiKey||'';
+  aiConfig.model=providerConfig.model||'';
+  document.getElementById('aiKey').value=aiConfig.apiKey;
+  document.getElementById('aiModel').value=aiConfig.model;
+  saveAIConfig();
+}
 function formatAIResponse(text){ return String(text||'').replace(/。/g, '。\n'); }
 function openAIHistoryDb(){
   if(aiHistoryDb) return Promise.resolve(aiHistoryDb);
@@ -13216,8 +13299,7 @@ function restoreAIHistoryForVisibleQuestions(){
 function toggleAIPanel(){ const p=document.getElementById('aiPanel'); if(p) p.classList.toggle('show'); }
 function saveAISettings(){
   aiConfig.provider=document.getElementById('aiProvider').value;
-  aiConfig.apiKey=(document.getElementById('aiKey').value||'').trim();
-  aiConfig.model=(document.getElementById('aiModel').value||'').trim();
+  saveCurrentAIProviderConfig();
   aiConfig.enableSearch = document.getElementById('aiSearchToggle')?.checked || false;
   aiConfig.enableThinking = document.getElementById('aiThinkingToggle')?.checked || false;
   saveAIConfig();
@@ -13380,7 +13462,7 @@ async function simplifySolution(key, btn){
     ],
     temperature:0.5, max_tokens:maxTok,
     stream:true,
-    ...(useThinking ? {reasoning_effort:"high"} : {reasoning_effort:"none"})
+    ...(aiConfig.provider === 'gemini' ? {} : (useThinking ? {reasoning_effort:"high"} : {reasoning_effort:"none"}))
   };
 
   const MAX_RETRY=3;
@@ -13397,7 +13479,7 @@ async function simplifySolution(key, btn){
 
       const resp=await fetch(ep.url,{
         method:'POST',
-        headers:{'Content-Type':'application/json','Authorization':'Bearer '+aiConfig.apiKey},
+        headers: aiAuthHeaders(),
         body:JSON.stringify(body),
         signal: controller.signal
       });
@@ -13634,7 +13716,7 @@ async function sendChatMessage(key) {
       messages: aiMessages,
       temperature: 0.2,
       max_tokens: 1500,
-      ...(aiConfig.enableThinking ? {reasoning_effort:"high"} : {reasoning_effort:"none"})
+      ...(aiConfig.provider === 'gemini' ? {} : (aiConfig.enableThinking ? {reasoning_effort:"high"} : {reasoning_effort:"none"}))
     };
     if (aiConfig.provider === 'deepseek' && enableSearch) {
       requestBody.enable_search = true;
@@ -15153,15 +15235,18 @@ if (window.renderQuestions) window.renderQuestions();
   <label>AI 服务商</label>
   <select id="aiProvider">
     <option value="deepseek">DeepSeek</option>
-    <option value="qwen">通义千问</option>
+    <option value="gemini">Gemini</option>
     <option value="zhipu">智谱 GLM</option>
+    <option value="qwen">通义千问</option>
+    <option value="siliconflow">硅基流动</option>
+    <option value="openrouter">OpenRouter</option>
     <option value="openai">OpenAI</option>
   </select>
   <label>API Key</label>
   <input type="password" id="aiKey" placeholder="sk-...">
   <div style="font-size:11px;color:#64748b;line-height:1.5;margin-top:-2px;">走中转模式时无需填写，留空即可；中转失败时会自动降级到直连，此时才需要填。</div>
   <label>模型（可选，留空用默认）</label>
-  <input type="text" id="aiModel" placeholder="如 deepseek-chat">
+  <input type="text" id="aiModel" placeholder="留空用默认；可填 gemini-3.8-flash / glm-4-flash / Qwen/Qwen2.5-7B-Instruct …">
   <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#2d3748;padding:4px 0;cursor:pointer;">
     <input type="checkbox" id="aiThinkingToggle" style="width:16px;height:16px;accent-color:#3b82f6;">
     🧠 开启思考模式（更聪明，但更贵）
