@@ -13047,7 +13047,7 @@ let aiConfig={provider:'', apiKey:'', model:'', enableSearch:false};
 const AI_ENDPOINTS={
   deepseek:{
     url:'https://api.deepseek.com/chat/completions',
-    model:'deepseek-chat',
+    model:'deepseek-flash',
     authType:'bearer'
   },
   gemini:{
@@ -13067,12 +13067,12 @@ const AI_ENDPOINTS={
   },
   siliconflow:{
     url:'https://api.siliconflow.cn/v1/chat/completions',
-    model:'Qwen/Qwen2.5-7B-Instruct',
+    model:'Qwen/Qwen3-8B',
     authType:'bearer'
   },
   openrouter:{
     url:'https://openrouter.ai/api/v1/chat/completions',
-    model:'deepseek/deepseek-chat-v3.1:free',
+    model:'openrouter/free',
     authType:'bearer',
     extraHeaders:{'HTTP-Referer':'https://turbo-helium.local','X-Title':'Turbo Helium'}
   },
@@ -13188,7 +13188,12 @@ function loadAIConfig(){
     p.addEventListener('change',handleAIProviderChange);
   }
   const k=document.getElementById('aiKey'); if(k) k.value=aiConfig.apiKey;
-  const m=document.getElementById('aiModel'); if(m) m.value=aiConfig.model;
+  const m=document.getElementById('aiModel');
+  if(m){
+    const saved=(aiConfig.models&&aiConfig.models[provider])||aiConfig.model||'';
+    const fallback=(AI_ENDPOINTS[provider]&&AI_ENDPOINTS[provider].model)||'';
+    m.value=saved||fallback;
+  }
   const toggle=document.getElementById('aiSearchToggle');
   if(toggle) toggle.checked = aiConfig.enableSearch || false;
   const thinkingToggle=document.getElementById('aiThinkingToggle');
@@ -13214,7 +13219,9 @@ function handleAIProviderChange(){
   aiConfig.apiKey=providerConfig.apiKey||'';
   aiConfig.model=providerConfig.model||'';
   document.getElementById('aiKey').value=aiConfig.apiKey;
-  document.getElementById('aiModel').value=aiConfig.model;
+  const saved=(aiConfig.models&&aiConfig.models[aiConfig.provider])||aiConfig.model||'';
+  const fallback=(AI_ENDPOINTS[aiConfig.provider]&&AI_ENDPOINTS[aiConfig.provider].model)||'';
+  document.getElementById('aiModel').value=saved||fallback;
   saveAIConfig();
 }
 function formatAIResponse(text){ return String(text||'').replace(/。/g, '。\n'); }
