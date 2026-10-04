@@ -13561,6 +13561,23 @@ const NORMAL_PROMPT = '你是公考辅导老师。请用"分点+缩进"的纯文
 //   推理内容随便想，但 content 里只输出结构化的最终答案，且加粗不能省。
 const THINKING_PROMPT = '你是公考辅导老师。\n\n【第一步：分析】\n先在心里分析这道题：判断题型、找正确答案、逐个选项想清楚对错理由、总结关键与易错点。这一步可以在你的推理内容里尽情展开，不用受格式限制。\n\n【第二步：输出最终答案】\n分析完成后，严格按照下面的格式输出最终答案。最终输出的格式和不勾思考模式时完全一致，一个字都不能省。\n\n格式结构（顺序固定，标题必须原样保留）：\n【正确答案】普通选择题/判断项数量题只写字母，如 B、C；纯判断题写"对/错"或"全部正确/第N项错误"\n【逐项分析】\n· 每一项都必须独占一行，不能把多项挤在同一行，不能用空格代替换行；\n· 普通选择题：每个选项单独一行，格式为：字母 ✅/❌ 一句话理由，例如：\n  A ✅ 建立省级独角兽企业培育机制\n  B ✅ 健全专精特新企业赋能体系\n  C ❌ 《方案》要求向上下游延伸，选项漏"下"\n  D ✅ 推动孵化载体专业化发展\n· 纯判断题：每个判断句单独一行，格式为：序号 ✅/❌ 一句话理由，序号用 ①②③④…；\n· 判断项数量题：先逐项判断（每项一行），最后一行总结"综上，正确的有 N 项，选 X"。\n【题型】一句话说明这是哪种题型\n【关键】一句话点破破题点\n【易错提醒】一句话（没有就不写这一行）\n\n加粗规则（非常重要，不能省）：\n关键概念、地区名、政策名、文件名、会议名、时间节点、易错词，必须用 **双星号** 包住，例如 **压舱石**、**东北**、**绿色低碳高质量发展先行区**。每道题加粗 3-8 处，不要整句加粗。\n\n硬性要求：\n1. 不写客套话，不重复题干，不写"这道题考查的是"之类的开场白；\n2. 逐项分析必须覆盖每一项，不能漏项、不能合并；\n3. 【字数铁律】最终输出的全文总字数绝对不得超过 300 字。能 200 字说清的，就绝不写到 300 字；能 150 字说清的，就绝不写到 200 字。宁可少说，不可多说。必须写完整，结尾要有句号，不能中途断掉；\n4. 【最关键】最终输出（content 字段）里必须只有上面这个结构化内容，不能包含你的分析过程、自我检查、自问自答；\n5. 【最关键】加粗效果必须和不勾思考模式时一模一样，**双星号** 一处都不能少。';
 
+const FREE_MODEL_PROMPT = '你是公考解析工具。严格按以下规则输出，违规即错误。\n\n先判断题型：\n· 题干有①②③或(1)(2)(3)序号 → 逐项分析这些序号\n· 否则 → 逐项分析 A/B/C/D\n\n输出格式（必须一字不差，只输出结构）：\n【正确答案】只写字母，如 B\n【逐项分析】\nA ✅ 一句话\nB ❌ 应为xxx\nC ✅ 一句话\nD ✅ 一句话\n【题型】一句话\n【关键】一句话\n\n铁律（违反即失败）：\n1. 全文≤250字，每项≤20字；\n2. ❌项必须写"应为xxx"指出正确内容；\n3. 关键概念、政策名、地区名、时间词用 **双星号** 包住，如 **压舱石**、**东北**、**十四五**，每题加粗3-6处，不整句加粗；\n4. 禁止开场白、禁止重复题干、禁止总结；\n5. 只输出上述结构，多余的字一个字都不能有。';
+
+// 按服务商分档 max_tokens：抑制免费模型超字数
+// 300 中文字 ≈ 400-600 token；免费模型给较紧上限
+const MAX_TOKENS_BY_PROVIDER = {
+  deepseek:    { normal: 2000, thinking: 4000 },
+  zhipu:       { normal: 700,  thinking: 1000 },
+  openrouter:  { normal: 700,  thinking: 1000 },
+  qwen:        { normal: 800,  thinking: 1200 },
+  siliconflow: { normal: 800,  thinking: 1200 },
+  openai:      { normal: 1500, thinking: 3000 },
+  gemini:      { normal: 1500, thinking: 3000 }
+};
+
+// 免费/弱服从模型白名单：这些用极简提示词
+const FREE_PROVIDERS = ['zhipu', 'openrouter', 'qwen', 'siliconflow'];
+
 async function simplifySolution(key, btn){
   const item=filteredQuestions.find(function(q){ return q._key===key; });
   if(!item || !item.solution) return;
@@ -13579,12 +13596,21 @@ async function simplifySolution(key, btn){
   const streamTarget=result.querySelector('.q-ai-stream');
 
   const useThinking = !!aiConfig.enableThinking;
-  const maxTok = useThinking ? 4000 : 2000;
+
+  // 按 provider 选提示词：DeepSeek 用完整版，免费模型用极简版
+  const useFreePrompt = FREE_PROVIDERS.indexOf(aiConfig.provider) !== -1;
+  const systemPrompt = useThinking
+    ? (useFreePrompt ? (FREE_MODEL_PROMPT + '\n（先在心里分析，只输出上述格式）') : THINKING_PROMPT)
+    : (useFreePrompt ? FREE_MODEL_PROMPT : NORMAL_PROMPT);
+
+  // 按 provider 选 max_tokens
+  const tokCfg = MAX_TOKENS_BY_PROVIDER[aiConfig.provider] || { normal: 1000, thinking: 1500 };
+  const maxTok = useThinking ? tokCfg.thinking : tokCfg.normal;
 
   const body={
     model: aiConfig.model || ep.model,
     messages:[
-      {role:'system', content: useThinking ? THINKING_PROMPT : NORMAL_PROMPT},
+      {role:'system', content: systemPrompt},
       {role:'user', content:'题目：'+(item.content||'').substring(0,500)+'\n\n原解析：'+(item.solution||'').substring(0,2000)}
     ],
     temperature:0.5, max_tokens:maxTok,
