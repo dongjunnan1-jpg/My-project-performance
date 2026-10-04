@@ -2943,7 +2943,7 @@ function switchAppMode(mode) {
 }
 
 // ===== 英语模块：数据访问层 =====
-const EN_KEYS = { articles:'en_articles', vocabulary:'en_vocabulary', vocabFiles:'en_vocab_files', groups:'en_groups', grammarBooks:'en_grammar_books', reviewState:'en_review_state', stats:'en_stats' };
+const EN_KEYS = { articles:'en_articles', vocabulary:'en_vocabulary', vocabFiles:'en_vocab_files', groups:'en_groups', grammarBooks:'en_grammar_books', reviewState:'en_review_state', stats:'en_stats', epubReading:'en_epub_reading', epubGrammar:'en_epub_grammar' };
 async function enGetArticles(){ return (await idbGet(EN_KEYS.articles))||[]; }
 async function enSetArticles(list){ return idbSet(EN_KEYS.articles,list); }
 async function enGetVocabulary(){ return (await idbGet(EN_KEYS.vocabulary))||{}; }
@@ -19637,6 +19637,1189 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     });
   });
   console.log('[FILTER-DEBUG] 已装载：选完排序/区间后，控制台会打印 filterState 的实时值。');
+})();
+</script>
+
+<style>
+  #enReaderOverlay {
+    position: fixed;
+    inset: 0;
+    display: none;
+    background: var(--bg);
+    z-index: 100002;
+    overflow: hidden;
+  }
+  #enReaderOverlay.show { display: block; }
+  .en-reader-shell {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .en-reader-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(255,255,255,.75);
+    backdrop-filter: blur(10px);
+    position: relative;
+    z-index: 2;
+  }
+  body.skin-dark .en-reader-header {
+    background: rgba(15,23,42,.82);
+  }
+  .en-reader-header .en-reader-title {
+    flex: 1;
+    min-width: 0;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+    font-weight: 700;
+  }
+  .en-reader-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .en-reader-btn {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    border-radius: 10px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .en-reader-btn.primary {
+    background: var(--grad-a);
+    color: var(--on-main);
+    border-color: transparent;
+  }
+  .en-reader-main {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    position: relative;
+  }
+  .en-reader-view-wrap {
+    flex: 1;
+    min-width: 0;
+    position: relative;
+    background: var(--surface);
+    overflow: hidden;
+    border-right: 1px solid var(--border);
+  }
+  #enReaderView {
+    width: 100%;
+    height: 100%;
+    background: var(--surface);
+  }
+  .en-reader-toc {
+    width: 280px;
+    max-width: 38vw;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    overflow: auto;
+    padding: 12px;
+    display: none;
+  }
+  .en-reader-toc.show { display: block; }
+  .en-reader-toc-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text);
+    cursor: pointer;
+    margin-bottom: 6px;
+  }
+  .en-reader-toc-item:hover { border-color: var(--border); background: var(--surface-muted); }
+  .en-reader-footer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .en-reader-progress {
+    flex: 1;
+    height: 8px;
+    background: var(--surface-muted);
+    border-radius: 999px;
+    overflow: hidden;
+    position: relative;
+  }
+  .en-reader-progress-bar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 0%;
+    background: linear-gradient(135deg, var(--grad-a), var(--grad-b));
+  }
+  .en-reader-epub-list,
+  .en-reader-stat-card {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .en-reader-book-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    cursor: pointer;
+    transition: transform .12s ease, border-color .12s ease;
+  }
+  .en-reader-book-item:hover { transform: translateY(-1px); border-color: var(--grad-a); }
+  .en-reader-book-cover {
+    width: 68px;
+    height: 92px;
+    border-radius: 10px;
+    object-fit: cover;
+    background: linear-gradient(135deg, var(--grad-a), var(--grad-b));
+    flex-shrink: 0;
+  }
+  .en-reader-book-meta {
+    min-width: 0;
+    flex: 1;
+  }
+  .en-reader-book-title {
+    font-weight: 700;
+    margin-bottom: 4px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .en-reader-book-info {
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .en-reader-book-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: stretch;
+  }
+  .en-reader-book-delete {
+    border: 0;
+    background: rgba(239,68,68,.12);
+    color: #ef4444;
+    border-radius: 8px;
+    padding: 6px 8px;
+    cursor: pointer;
+  }
+  .en-reader-dict-card {
+    position: fixed;
+    width: min(360px, calc(100vw - 24px));
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    z-index: 100004;
+    padding: 14px;
+    max-height: 70vh;
+    overflow: auto;
+  }
+  body.skin-dark .en-reader-dict-card {
+    background: #0f172a;
+  }
+  .en-reader-dict-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .en-reader-word {
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: .02em;
+  }
+  .en-reader-phono {
+    color: var(--text-muted);
+    margin-left: 6px;
+    font-size: 12px;
+  }
+  .en-reader-speak {
+    border: 1px solid var(--border);
+    background: transparent;
+    border-radius: 8px;
+    padding: 6px 8px;
+    cursor: pointer;
+    color: var(--text);
+  }
+  .en-reader-dict-body {
+    display: grid;
+    gap: 10px;
+  }
+  .en-reader-pos-group {
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--surface-muted);
+  }
+  .en-reader-pos-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+  }
+  .en-reader-pos-meanings {
+    margin: 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 4px;
+  }
+  .en-reader-example {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+  .en-reader-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .en-reader-card-actions .btn {
+    flex: 1; min-width: 104px;
+  }
+  .en-reader-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 20px;
+    transform: translateX(-50%);
+    background: rgba(15,23,42,.9);
+    color: #f8fafc;
+    padding: 10px 14px;
+    border-radius: 999px;
+    box-shadow: var(--shadow);
+    z-index: 100010;
+    font-size: 13px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .18s ease, transform .18s ease;
+  }
+  .en-reader-toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(-4px);
+  }
+  .en-reader-stat-panel {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+  }
+  .en-reader-stat-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+    box-shadow: var(--shadow);
+  }
+  .en-reader-stat-box .label { color: var(--text-muted); font-size: 12px; }
+  .en-reader-stat-box .num { display: block; margin-top: 8px; font-size: 28px; font-weight: 800; }
+  .en-reader-stat-box .hint { display: block; margin-top: 6px; color: var(--text-muted); font-size: 12px; }
+</style>
+
+<script>
+(function(){
+  'use strict';
+
+  // ====== 英语原版阅读增强：EPUB 双入口 + 划词查词 + URL 抓取 + 阅读统计 ======
+  var EN_READER_THEME_SEQUENCE = ['day', 'night', 'eye'];
+  var EN_READER_DEFAULT_FONT = { reading: 16, grammar: 15 };
+  var EN_READER_THEME_LABEL = { day: '日间', night: '夜间', eye: '护眼' };
+
+  window.__enReaderState = window.__enReaderState || {
+    currentEpubId: null,
+    currentModule: null,
+    book: null,
+    rendition: null,
+    chapterMap: [],
+    dictCard: null,
+    currentTheme: 'day',
+    currentFontSize: 16,
+    tocOpen: false
+  };
+
+  function enReaderToast(msg){
+    if(!msg) return;
+    var container = document.getElementById('enReaderToast');
+    if(!container){
+      container = document.createElement('div');
+      container.id = 'enReaderToast';
+      container.className = 'en-reader-toast';
+      document.body.appendChild(container);
+    }
+    container.textContent = String(msg);
+    container.classList.add('show');
+    clearTimeout(container.__timer);
+    container.__timer = setTimeout(function(){
+      container.classList.remove('show');
+    }, 1800);
+  }
+
+  function enReaderKey(moduleType){
+    return moduleType === 'grammar' ? EN_KEYS.epubGrammar : EN_KEYS.epubReading;
+  }
+
+  async function enReaderGetIndex(moduleType){
+    const key = enReaderKey(moduleType);
+    return (await idbGet(key)) || [];
+  }
+
+  async function enReaderSetIndex(moduleType, list){
+    return idbSet(enReaderKey(moduleType), Array.isArray(list) ? list : []);
+  }
+
+  function enReaderParseUrlList(raw){
+    if(!raw) return [];
+    var arr = String(raw).split(/\r?\n|,/).map(function(v){ return String(v).trim(); }).filter(Boolean);
+    var dedup = [];
+    arr.forEach(function(item){ if(dedup.indexOf(item) === -1) dedup.push(item); });
+    return dedup.slice(0, 20);
+  }
+
+  async function ensureEpubLibs(){
+    if (window.JSZip && window.ePub) return true;
+    var scripts = [
+      'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js',
+      'https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js'
+    ];
+    for (var i = 0; i < scripts.length; i++) {
+      if (document.querySelector('script[src="' + scripts[i] + '"]')) continue;
+      var s = document.createElement('script');
+      s.src = scripts[i];
+      s.async = false;
+      s.onload = function(){};
+      s.onerror = function(){
+        console.warn('[EPUB] 资源加载失败', this.src);
+      };
+      document.head.appendChild(s);
+    }
+    for (var j = 0; j < 60; j++) {
+      if (window.JSZip && window.ePub) return true;
+      await new Promise(function(resolve){ setTimeout(resolve, 100); });
+    }
+    if (!(window.JSZip && window.ePub)) {
+      enReaderToast('EPUB 解析库加载失败，请检查网络；可改用 TXT 导入');
+      return false;
+    }
+    return true;
+  }
+
+  async function parseEpub(file){
+    if (!file || typeof file.arrayBuffer !== 'function') throw new Error('无效 EPUB 文件');
+    if (!(window.JSZip && window.ePub)) {
+      var ok = await ensureEpubLibs();
+      if (!ok) throw new Error('EPUB 解析库加载失败，请检查网络；可改用 TXT 导入');
+    }
+    var buffer = await file.arrayBuffer();
+    var book = window.ePub(buffer);
+    await book.ready;
+    var metadata = (book.package && book.package.metadata) || (book.metadata || {});
+    var title = (metadata.title || file.name || '未命名 EPUB').replace(/\.epub$/i, '');
+    var author = metadata.creator || metadata.author || '未知作者';
+    var chapterList = [];
+    try {
+      var nav = (book.loaded && book.loaded.navigation) || (book.navigation || {});
+      var toc = nav.toc || [];
+      chapterList = toc.map(function(item, idx){
+        return {
+          id: item.id || ('chapter_' + idx),
+          label: item.label || ('第 ' + (idx + 1) + ' 章'),
+          href: item.href || item.id || ''
+        };
+      });
+    } catch (e) {
+      chapterList = [];
+    }
+    if (!chapterList.length && book.spine && book.spine.length) {
+      chapterList = book.spine.map(function(item, idx){
+        return { id: item.id || ('spine_' + idx), label: '第 ' + (idx + 1) + ' 章', href: item.href || item.id || '' };
+      });
+    }
+    var cover = null;
+    try {
+      if (typeof book.coverUrl === 'function') {
+        var coverValue = book.coverUrl();
+        if (coverValue && coverValue.then) coverValue = await coverValue;
+        if (typeof coverValue === 'string' && coverValue) cover = coverValue;
+      }
+    } catch (e) {
+      cover = null;
+    }
+    return {
+      id: 'epub_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      title: title,
+      author: author,
+      cover: cover,
+      chapterCount: chapterList.length,
+      chapters: chapterList,
+      createdAt: Date.now(),
+      arrayBuffer: buffer,
+      fileName: file.name || title
+    };
+  }
+
+  async function enReaderImportEpub(file, moduleType){
+    if (!file || !moduleType) return;
+    try {
+      var parsed = await parseEpub(file);
+      var list = await enReaderGetIndex(moduleType);
+      var item = {
+        id: parsed.id,
+        title: parsed.title,
+        author: parsed.author,
+        cover: parsed.cover,
+        chapterCount: parsed.chapterCount,
+        createdAt: parsed.createdAt
+      };
+      list.unshift(item);
+      await enReaderSetIndex(moduleType, list);
+      await idbSet('en_epub_file_' + item.id, parsed.arrayBuffer);
+      await idbSet('en_epub_progress_' + item.id, { cfi: '', percentage: 0, updatedAt: Date.now() });
+      var defaultTheme = moduleType === 'grammar' ? 'eye' : 'day';
+      var defaultFont = moduleType === 'grammar' ? 15 : 16;
+      await idbSet('en_epub_theme_' + item.id, { theme: defaultTheme, fontSize: defaultFont });
+      await enRenderFileList(moduleType);
+      enReaderToast('EPUB 已加入：' + item.title);
+      return item;
+    } catch (e) {
+      enReaderToast((e && e.message) || 'EPUB 导入失败');
+      return null;
+    }
+  }
+
+  function enReaderUploadEpub(moduleType){
+    if (!moduleType) return;
+    ensureEpubLibs().then(function(ok){
+      if (!ok) return;
+      var input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.epub';
+      input.onchange = function(){
+        var file = this.files && this.files[0];
+        if (!file) return;
+        if (file.size > 20 * 1024 * 1024) {
+          showConfirm('当前 EPUB 大于 20MB，解析和加载时间可能较长，是否继续？', function(){
+            enReaderImportEpub(file, moduleType);
+          });
+          input.value = '';
+          return;
+        }
+        enReaderImportEpub(file, moduleType);
+        input.value = '';
+      };
+      input.click();
+    });
+  }
+  window.enReaderUploadEpub = enReaderUploadEpub;
+
+  async function enReaderDeleteEpub(epubId, moduleType){
+    if (!epubId) return;
+    showConfirm('确定删除这本 EPUB 吗？此操作不可撤销。', async function(){
+      var list = await enReaderGetIndex(moduleType);
+      list = list.filter(function(item){ return item.id !== epubId; });
+      await enReaderSetIndex(moduleType, list);
+      await idbDel('en_epub_file_' + epubId);
+      await idbDel('en_epub_progress_' + epubId);
+      await idbDel('en_epub_theme_' + epubId);
+      if (window.__enReaderState.currentEpubId === epubId) {
+        enReaderClose();
+      }
+      await enRenderFileList(moduleType);
+      enReaderToast('EPUB 已删除');
+    });
+  }
+  window.enReaderDeleteEpub = enReaderDeleteEpub;
+
+  function enReaderEnsureOverlay(){
+    var overlay = document.getElementById('enReaderOverlay');
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = 'enReaderOverlay';
+    overlay.innerHTML = [
+      '<div class="en-reader-shell">',
+      '  <div class="en-reader-header">',
+      '    <button class="en-reader-btn" type="button" onclick="window.enReaderClose()">← 返回</button>',
+      '    <div class="en-reader-title" id="enReaderTitle">EPUB</div>',
+      '    <div class="en-reader-toolbar">',
+      '      <button class="en-reader-btn" type="button" onclick="window.enReaderToggleToc()">📑 目录</button>',
+      '      <button class="en-reader-btn" type="button" onclick="window.enReaderChangeFont(-1)">A-</button>',
+      '      <button class="en-reader-btn" type="button" onclick="window.enReaderChangeFont(1)">A+</button>',
+      '      <button class="en-reader-btn primary" type="button" onclick="window.enReaderCycleTheme()">主题</button>',
+      '      <span id="enReaderProgressText" class="en-reader-progress-text">0%</span>',
+      '    </div>',
+      '  </div>',
+      '  <div class="en-reader-main">',
+      '    <div class="en-reader-view-wrap"><div id="enReaderView"></div></div>',
+      '    <aside class="en-reader-toc" id="enReaderToc"></aside>',
+      '  </div>',
+      '  <div class="en-reader-footer">',
+      '    <button class="en-reader-btn" type="button" onclick="window.enReaderPrevChapter()">← 上一章</button>',
+      '    <button class="en-reader-btn" type="button" onclick="window.enReaderPrevPage()">← 上一页</button>',
+      '    <div class="en-reader-progress"><div class="en-reader-progress-bar" id="enReaderProgressBar"></div></div>',
+      '    <button class="en-reader-btn" type="button" onclick="window.enReaderNextPage()">下一页 →</button>',
+      '    <button class="en-reader-btn" type="button" onclick="window.enReaderNextChapter()">下一章 →</button>',
+      '  </div>',
+      '</div>'
+    ].join('');
+    document.body.appendChild(overlay);
+    return overlay;
+  }
+
+  function enReaderUpdateProgressUI(){
+    var state = window.__enReaderState || {};
+    var text = document.getElementById('enReaderProgressText');
+    var bar = document.getElementById('enReaderProgressBar');
+    if (!text || !bar) return;
+    var pct = Number(state.currentPercentage || 0) * 100;
+    text.textContent = Math.max(0, Math.min(100, Math.round(pct))) + '%';
+    bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  }
+
+  function enReaderFitThemeValue(theme){
+    return (theme === 'night' || theme === 'eye' || theme === 'day') ? theme : 'day';
+  }
+
+  function enReaderApplyTheme(theme, fontSize){
+    var state = window.__enReaderState || {};
+    state.currentTheme = enReaderFitThemeValue(theme);
+    state.currentFontSize = Number(fontSize) || EN_READER_DEFAULT_FONT.reading;
+    var rendition = state.rendition;
+    if (!rendition || !rendition.themes || !rendition.themes.register) return;
+    var themeMap = {
+      day: { 'body': { 'background-color': '#ffffff !important', 'color': '#14181f !important', 'font-size': state.currentFontSize + 'px !important' } },
+      night: { 'body': { 'background-color': '#0f172a !important', 'color': '#e2e8f0 !important', 'font-size': state.currentFontSize + 'px !important' } },
+      eye: { 'body': { 'background-color': '#eefcf1 !important', 'color': '#123220 !important', 'font-size': state.currentFontSize + 'px !important' } }
+    };
+    rendition.themes.register('enReaderDayTheme', themeMap.day);
+    rendition.themes.register('enReaderNightTheme', themeMap.night);
+    rendition.themes.register('enReaderEyeTheme', themeMap.eye);
+    rendition.themes.select('enReader' + state.currentTheme.charAt(0).toUpperCase() + state.currentTheme.slice(1) + 'Theme');
+  }
+
+  function enReaderCycleTheme(){
+    var state = window.__enReaderState || {};
+    var idx = EN_READER_THEME_SEQUENCE.indexOf(state.currentTheme || 'day');
+    var next = EN_READER_THEME_SEQUENCE[(idx + 1) % EN_READER_THEME_SEQUENCE.length];
+    var fontSize = Number(state.currentFontSize) || EN_READER_DEFAULT_FONT[state.currentModule || 'reading'];
+    enReaderSaveTheme(state.currentEpubId, next, fontSize);
+    enReaderApplyTheme(next, fontSize);
+    enReaderToast('主题：' + (EN_READER_THEME_LABEL[next] || next));
+  }
+
+  function enReaderChangeFont(delta){
+    var state = window.__enReaderState || {};
+    var next = (Number(state.currentFontSize) || EN_READER_DEFAULT_FONT[state.currentModule || 'reading']) + delta;
+    next = Math.max(12, Math.min(26, next));
+    state.currentFontSize = next;
+    if (state.currentEpubId) enReaderSaveTheme(state.currentEpubId, state.currentTheme || 'day', next);
+    enReaderApplyTheme(state.currentTheme || 'day', next);
+  }
+
+  async function enReaderSaveTheme(epubId, theme, fontSize){
+    if (!epubId) return;
+    var entry = { theme: enReaderFitThemeValue(theme), fontSize: Number(fontSize) || EN_READER_DEFAULT_FONT.reading };
+    await idbSet('en_epub_theme_' + epubId, entry);
+    var state = window.__enReaderState || {};
+    state.currentTheme = entry.theme;
+    state.currentFontSize = entry.fontSize;
+  }
+
+  async function enReaderSaveProgress(epubId, cfi, percentage){
+    if (!epubId) return;
+    var state = window.__enReaderState || {};
+    state.currentCfi = cfi || '';
+    state.currentPercentage = Number(percentage) || 0;
+    await idbSet('en_epub_progress_' + epubId, { cfi: cfi || '', percentage: state.currentPercentage, updatedAt: Date.now() });
+    enReaderUpdateProgressUI();
+  }
+
+  function enReaderRenderToc(book){
+    var tocWrap = document.getElementById('enReaderToc');
+    if (!tocWrap) return;
+    var nav = (book && (book.navigation || (book.loaded && book.loaded.navigation))) || {};
+    var list = nav.toc || [];
+    tocWrap.innerHTML = '';
+    if (!list.length) {
+      tocWrap.innerHTML = '<div class="empty-state">暂无目录</div>';
+      return;
+    }
+    list.forEach(function(item, idx){
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'en-reader-toc-item';
+      btn.textContent = (idx + 1) + '. ' + (item.label || '章节');
+      btn.onclick = function(){
+        if (item.href) {
+          try {
+            window.__enReaderState.rendition.display(item.href);
+          } catch (e) {
+            window.__enReaderState.rendition.display();
+          }
+        }
+        enReaderToggleToc(false);
+      };
+      tocWrap.appendChild(btn);
+    });
+  }
+
+  function enReaderToggleToc(forceOpen){
+    var state = window.__enReaderState || {};
+    var toc = document.getElementById('enReaderToc');
+    if (!toc) return;
+    var next = typeof forceOpen === 'boolean' ? forceOpen : !toc.classList.contains('show');
+    toc.classList.toggle('show', next);
+    state.tocOpen = next;
+  }
+  window.enReaderToggleToc = function(forceOpen){ enReaderToggleToc(forceOpen); };
+
+  async function enReaderOpen(epubId, moduleType){
+    if (!epubId || !moduleType) return;
+    await ensureEpubLibs();
+    if (!(window.JSZip && window.ePub)) {
+      enReaderToast('EPUB 解析库加载失败，请检查网络；可改用 TXT 导入');
+      return;
+    }
+    var state = window.__enReaderState;
+    var list = await enReaderGetIndex(moduleType);
+    var entry = list.find(function(item){ return item.id === epubId; });
+    if (!entry) {
+      enReaderToast('未找到该 EPUB');
+      return;
+    }
+    var overlay = enReaderEnsureOverlay();
+    overlay.classList.add('show');
+    document.body.style.overflow = 'hidden';
+    state.currentEpubId = epubId;
+    state.currentModule = moduleType;
+    state.currentTheme = 'day';
+    state.currentFontSize = moduleType === 'grammar' ? 15 : 16;
+    document.getElementById('enReaderTitle').textContent = entry.title || 'EPUB';
+    var bookBuffer = await idbGet('en_epub_file_' + epubId);
+    if (!bookBuffer) {
+      enReaderToast('EPUB 数据已丢失');
+      return;
+    }
+    try {
+      if (state.rendition && state.book) {
+        try { state.rendition.destroy(); } catch (e) {}
+      }
+      state.book = window.ePub(bookBuffer);
+      var view = document.getElementById('enReaderView');
+      state.rendition = state.book.renderTo(view, { width: '100%', height: '100%', spread: 'always', flow: 'paginated' });
+      var themeData = await idbGet('en_epub_theme_' + epubId) || { theme: (moduleType === 'grammar' ? 'eye' : 'day'), fontSize: (moduleType === 'grammar' ? 15 : 16) };
+      state.currentTheme = enReaderFitThemeValue(themeData.theme || (moduleType === 'grammar' ? 'eye' : 'day'));
+      state.currentFontSize = Number(themeData.fontSize) || (moduleType === 'grammar' ? 15 : 16);
+      enReaderApplyTheme(state.currentTheme, state.currentFontSize);
+      enReaderRenderToc(state.book);
+      state.rendition.on('relocated', function(location){
+        var pct = Number(location && location.percentage) || 0;
+        var cfi = location && (location.start && location.start.cfi) ? location.start.cfi : '';
+        if (location && location.start && location.start.href) cfi = location.start.href;
+        enReaderSaveProgress(epubId, cfi, pct);
+      });
+      state.rendition.on('swipe', function(direction){
+        if (direction === 'left') { state.rendition.next(); }
+        if (direction === 'right') { state.rendition.prev(); }
+      });
+      state.rendition.on('selected', function(cfiRange, selected){
+        try { if (selected && selected.toString) selected = selected.toString(); } catch (e) {}
+        var text = selected ? String(selected).replace(/\s+/g, ' ').trim() : '';
+        if (!text) return;
+        var word = text.replace(/[^A-Za-z\s'-]/g, ' ');
+        var parts = word.split(/\s+/).filter(Boolean);
+        if (parts.length > 3) return;
+        if (!/^[A-Za-z][A-Za-z' -]*$/.test(word.replace(/\s+/g, ' '))) return;
+        mlRemoveSelBtn();
+        enReaderLookup(word, { epubId: epubId, moduleType: moduleType, cfi: cfiRange || '' });
+      });
+      var progress = await idbGet('en_epub_progress_' + epubId) || { cfi: '', percentage: 0 };
+      if (progress && progress.cfi) {
+        try { await state.rendition.display(progress.cfi); } catch (e) { await state.rendition.display(); }
+      } else {
+        await state.rendition.display();
+      }
+      state.currentPercentage = Number(progress && progress.percentage) || 0;
+      enReaderUpdateProgressUI();
+    } catch (e) {
+      console.error('[EPUB] open failed', e);
+      enReaderToast('EPUB 解析失败：' + (e && e.message ? e.message : '未知错误'));
+    }
+  }
+  window.enReaderOpen = enReaderOpen;
+
+  function enReaderClose(){
+    var state = window.__enReaderState || {};
+    var overlay = document.getElementById('enReaderOverlay');
+    if (overlay) overlay.classList.remove('show');
+    document.body.style.overflow = '';
+    if (state.rendition && state.rendition.destroy) {
+      try { state.rendition.destroy(); } catch (e) {}
+    }
+    state.rendition = null;
+    state.book = null;
+    state.currentEpubId = null;
+    state.currentModule = null;
+    if (state.dictCard && state.dictCard.parentNode) state.dictCard.parentNode.removeChild(state.dictCard);
+    state.dictCard = null;
+    enReaderToggleToc(false);
+  }
+  window.enReaderClose = enReaderClose;
+
+  function enReaderGetDefaultTheme(moduleType){
+    return moduleType === 'grammar' ? 'eye' : 'day';
+  }
+
+  function enReaderGetDefaultFontSize(moduleType){
+    return moduleType === 'grammar' ? 15 : 16;
+  }
+
+  async function enReaderLookup(word, context){
+    var cleanWord = String(word || '').trim();
+    if (!cleanWord) return null;
+    cleanWord = cleanWord.replace(/[^A-Za-z'\-]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!cleanWord) return null;
+    if (cleanWord.split(/\s+/).length > 3) return null;
+    var lower = cleanWord.toLowerCase();
+    var vocab = await enGetVocabulary();
+    if (vocab[lower]) {
+      var result = Object.assign({}, vocab[lower], { word: lower, source: 'local' });
+      enReaderRenderDictCard(result, null, context);
+      return result;
+    }
+    var cached = await idbGet('en_dict_' + lower);
+    if (cached && cached.word) {
+      enReaderRenderDictCard(cached, null, context);
+      return cached;
+    }
+    try {
+      var resp = await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/' + encodeURIComponent(lower));
+      var data = await resp.json();
+      if (Array.isArray(data) && data.length) {
+        var first = data[0];
+        var meanings = (first.meanings || []).map(function(m){
+          var defs = (m.definitions || []).map(function(d){ return d.definition || ''; }).filter(Boolean).slice(0, 3);
+          return { pos: m.partOfSpeech || 'unknown', meanings: defs };
+        });
+        var examples = [];
+        (first.meanings || []).forEach(function(m){
+          (m.definitions || []).forEach(function(d){ if (d.example) examples.push(d.example); });
+          if (examples.length >= 3) return;
+        });
+        var result = {
+          word: lower,
+          phonetic: Array.isArray(first.phonetics) ? (first.phonetics.find(function(p){ return p.text; }) || {}).text || '' : '',
+          pos: meanings[0] ? meanings[0].pos : '',
+          meaning: meanings.map(function(item){ return item.pos + ': ' + item.meanings.join('; '); }).join(' / '),
+          meanings: meanings,
+          examples: examples.slice(0, 3),
+          synonyms: Array.isArray(first.meanings) ? (first.meanings || []).flatMap(function(m){ return (m.synonyms || []).slice(0, 3); }) : [],
+          source: 'api'
+        };
+        await idbSet('en_dict_' + lower, Object.assign({}, result, { createdAt: Date.now() }));
+        enReaderRenderDictCard(result, null, context);
+        return result;
+      }
+    } catch (e) {
+      console.warn('[DICT] API fail', e);
+    }
+    try {
+      var provider = aiConfig && aiConfig.provider ? aiConfig.provider : 'deepseek';
+      var model = aiConfig && aiConfig.model ? aiConfig.model : (AI_ENDPOINTS[provider] && AI_ENDPOINTS[provider].model ? AI_ENDPOINTS[provider].model : 'deepseek-flash');
+      var aiRes = await requestAI({
+        provider: provider,
+        model: model,
+        messages: [{
+          role: 'system',
+          content: '你是英语词典助手。请按 JSON 输出：{"word":"...","phonetic":"/.../","pos":"n.","meanings":[{"pos":"n.","meanings":["..."]}],"examples":["example1","example2"],"synonyms":["..."]}。只输出 JSON。'
+        }, {
+          role: 'user',
+          content: '解释英文单词：' + lower
+        }],
+        temperature: 0.2,
+        max_tokens: 1200,
+        enable_search: !!aiConfig.enableSearch,
+        search: null
+      });
+      var text = aiRes && aiRes.data && aiRes.data.choices && aiRes.data.choices[0] ? aiRes.data.choices[0].message.content : '';
+      var json = text.match(/\{[\s\S]*\}/);
+      var parsed = json ? JSON.parse(json[0]) : null;
+      if (parsed) {
+        var aiResult = {
+          word: lower,
+          phonetic: parsed.phonetic || '',
+          pos: parsed.pos || '',
+          meaning: Array.isArray(parsed.meanings) ? parsed.meanings.map(function(m){ return (m.pos || '') + ': ' + (Array.isArray(m.meanings) ? m.meanings.join('; ') : ''); }).join(' / ') : '',
+          meanings: Array.isArray(parsed.meanings) ? parsed.meanings : [],
+          examples: Array.isArray(parsed.examples) ? parsed.examples.slice(0, 3) : [],
+          synonyms: Array.isArray(parsed.synonyms) ? parsed.synonyms.slice(0, 6) : [],
+          source: 'ai'
+        };
+        await idbSet('en_dict_' + lower, Object.assign({}, aiResult, { createdAt: Date.now() }));
+        enReaderRenderDictCard(aiResult, null, context);
+        return aiResult;
+      }
+    } catch (e) {
+      console.warn('[DICT] AI fallback fail', e);
+    }
+    enReaderToast('未找到可用释义：' + lower);
+    return null;
+  }
+
+  function enReaderPositionForCard(anchorEl){
+    var rect = anchorEl && anchorEl.getBoundingClientRect ? anchorEl.getBoundingClientRect() : null;
+    var left = 24;
+    var top = 24;
+    if (rect) {
+      left = Math.min(window.innerWidth - 320, Math.max(16, rect.left + rect.width / 2 - 140));
+      if (rect.top > 260) top = Math.max(16, rect.top - 180);
+      else top = Math.min(window.innerHeight - 260, rect.bottom + 12);
+    }
+    left = Math.max(12, Math.min(left, window.innerWidth - 320));
+    top = Math.max(12, Math.min(top, window.innerHeight - 200));
+    return { left: left, top: top };
+  }
+
+  async function enReaderRenderDictCard(result, anchorEl, context){
+    if (!result) return;
+    var state = window.__enReaderState || {};
+    if (state.dictCard && state.dictCard.parentNode) {
+      state.dictCard.parentNode.removeChild(state.dictCard);
+    }
+    var card = document.createElement('div');
+    card.className = 'en-reader-dict-card';
+    var phonetic = result.phonetic || '';
+    var meanings = Array.isArray(result.meanings) && result.meanings.length ? result.meanings : [{ pos: result.pos || 'n.', meanings: [result.meaning || '暂无释义'] }];
+    var examples = Array.isArray(result.examples) && result.examples.length ? result.examples : [];
+    var existing = document.querySelector('.en-reader-dict-card');
+    if (existing) existing.remove();
+    var vocab = await enGetVocabulary();
+    var isKnown = !!vocab[(String(result.word || '').toLowerCase())];
+    var word = String(result.word || '').toLowerCase();
+    card.innerHTML = [
+      '<div class="en-reader-dict-head">',
+      '  <div><span class="en-reader-word">' + escapeHtml(word) + '</span><span class="en-reader-phono">' + escapeHtml(phonetic) + '</span></div>',
+      '  <button type="button" class="en-reader-speak" onclick="window.enReaderSpeakWord(\'' + word.replace(/'/g, "\\'") + '\')">🔊</button>',
+      '</div>',
+      '<div class="en-reader-dict-body">',
+      meanings.map(function(item){
+        return '<div class="en-reader-pos-group"><div class="en-reader-pos-label">' + escapeHtml(item.pos || '词性') + '</div><ul class="en-reader-pos-meanings">' + (Array.isArray(item.meanings) ? item.meanings.map(function(m){ return '<li>' + escapeHtml(String(m)) + '</li>'; }).join('') : '<li>' + escapeHtml(String(item.meaning || '暂无释义')) + '</li>') + '</ul></div>';
+      }).join(''),
+      examples.length ? '<div class="en-reader-pos-group"><div class="en-reader-pos-label">例句</div><ul class="en-reader-example">' + examples.slice(0,3).map(function(ex){ return '<li>' + escapeHtml(String(ex)) + '</li>'; }).join('') + '</ul></div>' : '',
+      '</div>',
+      '<div class="en-reader-card-actions">',
+      '  <button type="button" class="btn btn-primary" onclick="window.enReaderAddToVocab(\'' + word.replace(/'/g, "\\'") + '\', ' + JSON.stringify(result).replace(/'/g, "\\'") + ')">' + (isKnown ? '⭐ 已在生词本' : '⭐ 加入生词本') + '</button>',
+      '  <button type="button" class="btn btn-outline" onclick="window.enReaderMarkKnown(\'' + word.replace(/'/g, "\\'") + '\')">✅ 已掌握</button>',
+      '  <button type="button" class="btn btn-outline" onclick="window.enReaderOpenWordDetail(\'' + word.replace(/'/g, "\\'") + '\')">🔍 查看详情</button>',
+      '</div>'
+    ].join('');
+    state.dictCard = card;
+    document.body.appendChild(card);
+    var pos = enReaderPositionForCard(anchorEl || document.body);
+    card.style.left = pos.left + 'px';
+    card.style.top = pos.top + 'px';
+    document.addEventListener('click', function closeCard(ev){
+      if (card && !card.contains(ev.target) && !ev.target.closest && !ev.target.closest('.en-reader-dict-card')) {
+        if (card.parentNode) card.parentNode.removeChild(card);
+        document.removeEventListener('click', closeCard);
+      }
+    });
+  }
+
+  window.enReaderSpeakWord = function(word){
+    if (!window.speechSynthesis) {
+      enReaderToast('当前浏览器不支持 Web Speech API');
+      return;
+    }
+    var u = new SpeechSynthesisUtterance(word || '');
+    u.lang = 'en-US';
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  };
+
+  async function enReaderAddToVocab(word, result){
+    var vocab = await enGetVocabulary();
+    var key = String(word || '').trim().toLowerCase();
+    if (!key) return;
+    var entry = vocab[key] || {};
+    entry.meaning = result && result.meaning ? result.meaning : entry.meaning || '';
+    entry.pos = result && result.pos ? result.pos : entry.pos || '';
+    entry.difficulty = entry.difficulty || '';
+    entry.fileId = context && context.epubId ? ('reading_' + context.epubId) : (entry.fileId || 'reading_manual');
+    entry.mastered = false;
+    entry.wrongCount = Number(entry.wrongCount || 0);
+    entry.correctCount = Number(entry.correctCount || 0);
+    entry.createdAt = entry.createdAt || Date.now();
+    entry.nextReviewAt = Date.now();
+    vocab[key] = entry;
+    await enSetVocabulary(vocab);
+    await enRenderReview();
+    await enStartReview();
+    enReaderToast('已加入生词本：' + key);
+    if (window.__enReaderState && window.__enReaderState.dictCard && window.__enReaderState.dictCard.parentNode) {
+      window.__enReaderState.dictCard.parentNode.removeChild(window.__enReaderState.dictCard);
+      window.__enReaderState.dictCard = null;
+    }
+  }
+  window.enReaderAddToVocab = enReaderAddToVocab;
+
+  async function enReaderMarkKnown(word){
+    var vocab = await enGetVocabulary();
+    var key = String(word || '').trim().toLowerCase();
+    if (!key || !vocab[key]) {
+      enReaderToast('该词尚未加入生词本');
+      return;
+    }
+    vocab[key].mastered = true;
+    vocab[key].correctCount = Number(vocab[key].correctCount || 0) + 1;
+    vocab[key].nextReviewAt = Date.now();
+    await enSetVocabulary(vocab);
+    await enRenderReview();
+    enReaderToast('已标记为已掌握：' + key);
+  }
+  window.enReaderMarkKnown = enReaderMarkKnown;
+
+  function enReaderOpenWordDetail(word){
+    enReaderToast('词详情页正在补充中：' + word);
+  }
+  window.enReaderOpenWordDetail = enReaderOpenWordDetail;
+
+  function enReaderShowUrlDialog(){
+    showPrompt('请输入文章 URL（每行一条，最多 20 条）：', '', function(raw){
+      var urls = enReaderParseUrlList(raw);
+      if (!urls.length) {
+        enReaderToast('未检测到有效 URL');
+        return;
+      }
+      enReaderFetchUrls(urls);
+    });
+  }
+  window.enReaderShowUrlDialog = enReaderShowUrlDialog;
+
+  async function enReaderFetchUrls(urls){
+    var list = enReaderParseUrlList(urls && urls.join ? urls.join('\n') : urls);
+    if (!list.length) return;
+    var results = { success: 0, failure: 0, fails: [] };
+    var articles = await enGetArticles();
+    for (var i = 0; i < list.length; i++) {
+      var url = list[i];
+      try {
+        var resp = await fetch(NEWS_FETCH_WORKER + '/?url=' + encodeURIComponent(url));
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        var html = await resp.text();
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var root = null;
+        var candidates = ['.article-content', '.content-body', '[class*="article-content"]', 'main', '[class*="content"]', 'body'];
+        for (var j = 0; j < candidates.length; j++) {
+          var found = doc.querySelector(candidates[j]);
+          if (found) { root = found; break; }
+        }
+        if (!root) root = doc.body || doc.documentElement;
+        var plain = (root && root.textContent ? root.textContent : (doc.body && doc.body.textContent) || '').replace(/\s+/g, ' ').replace(/\n\s*\n/g, '\n').trim();
+        if (!plain || plain.length < 200) throw new Error('正文过短');
+        var title = (doc.title || plain.slice(0, 80)).replace(/\s+/g, ' ').trim();
+        if (!title || title.length < 2) title = '抓取文章 ' + (i + 1);
+        title = title.slice(0, 60);
+        articles.unshift({
+          id: 'a_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+          title: title,
+          content: plain,
+          createdAt: Date.now(),
+          parsed: null
+        });
+        results.success += 1;
+      } catch (e) {
+        results.failure += 1;
+        results.fails.push({ url: url, reason: (e && e.message) || '抓取失败' });
+      }
+      if (i < list.length - 1) {
+        await new Promise(function(resolve){ setTimeout(resolve, 500); });
+      }
+    }
+    await enSetArticles(articles);
+    await enRenderFileList('reading');
+    showConfirm('成功 ' + results.success + ' 条，失败 ' + results.failure + ' 条' + (results.fails.length ? '\n失败 URL：\n' + results.fails.map(function(item){ return item.url + '（' + item.reason + '）'; }).join('\n') : ''), function(){});
+    enReaderToast('抓取完成：成功 ' + results.success + ' 条');
+  }
+  window.enReaderFetchUrls = enReaderFetchUrls;
+
+  async function enReaderInjectStats(){
+    var grid = document.querySelector('.dashboard-grid');
+    if (!grid) return;
+    if (grid.getAttribute('data-en-reader-stats') === 'done') return;
+    var epubReading = await idbGet(EN_KEYS.epubReading) || [];
+    var epubGrammar = await idbGet(EN_KEYS.epubGrammar) || [];
+    var dictCount = (await idbGetByPrefix('en_dict_')).length;
+    var items = [
+      { icon: '📚', value: String(epubReading.length + epubGrammar.length), label: '已读原版书' },
+      { icon: '📖', value: String(dictCount), label: '累计查词数' }
+    ];
+    items.forEach(function(item){
+      var div = document.createElement('div');
+      div.className = 'dash-item';
+      div.innerHTML = '<span class="dash-icon">' + item.icon + '</span><span class="dash-value">' + item.value + '</span><span class="dash-label">' + item.label + '</span>';
+      grid.appendChild(div);
+    });
+    grid.setAttribute('data-en-reader-stats', 'done');
+  }
+
+  async function enReaderRenderStats(){
+    var reviewStats = document.getElementById('enReviewStats');
+    if (!reviewStats) return;
+    var vocab = await enGetVocabulary();
+    var words = Object.keys(vocab);
+    var now = Date.now();
+    var dicts = await idbGetByPrefix('en_dict_');
+    var weekly = 0;
+    var monthly = 0;
+    dicts.forEach(function(item){
+      if (!item || !item.createdAt) return;
+      var diff = now - Number(item.createdAt);
+      if (diff <= 7 * 24 * 60 * 60 * 1000) weekly += 1;
+      if (diff <= 30 * 24 * 60 * 60 * 1000) monthly += 1;
+    });
+    var due = words.filter(function(word){ return !vocab[word].mastered && (vocab[word].nextReviewAt || 0) <= now; }).length;
+    var mastered = words.filter(function(word){ return !!vocab[word].mastered; }).length;
+    reviewStats.innerHTML = [
+      '<div class="en-reader-stat-panel">',
+      '  <div class="en-reader-stat-box"><span class="label">本周查词数</span><span class="num">' + weekly + '</span><span class="hint">近 7 天</span></div>',
+      '  <div class="en-reader-stat-box"><span class="label">本月查词数</span><span class="num">' + monthly + '</span><span class="hint">近 30 天</span></div>',
+      '  <div class="en-reader-stat-box"><span class="label">待复习生词</span><span class="num">' + due + '</span><span class="hint">艾宾浩斯节奏</span></div>',
+      '  <div class="en-reader-stat-box"><span class="label">已掌握生词</span><span class="num">' + mastered + '</span><span class="hint">已掌握</span></div>',
+      '</div>'
+    ].join('');
+  }
+
+  var _origRenderEnglishModuleContentLive = renderEnglishModuleContentLive;
+  renderEnglishModuleContentLive = function(moduleId){
+    var html = _origRenderEnglishModuleContentLive(moduleId);
+    if (moduleId === 'reading') {
+      var replace = '<button class="btn btn-outline" onclick="enPasteArticle()"';
+      if (html.indexOf(replace) !== -1) {
+        html = html.replace(replace, '<button class="btn btn-primary" onclick="window.enReaderUploadEpub(\'reading\')">📚 上传 EPUB</button><button class="btn btn-outline" onclick="window.enReaderShowUrlDialog()">🔗 抓取 URL</button><button class="btn btn-outline" onclick="enPasteArticle()"');
+      }
+    } else if (moduleId === 'grammar') {
+      var gAnchor = '<label for="enGrammarInput"';
+      if (html.indexOf(gAnchor) !== -1) {
+        html = html.replace(gAnchor, '<button class="btn btn-primary" onclick="window.enReaderUploadEpub(\'grammar\')">📘 上传 EPUB</button><label for="enGrammarInput"');
+      }
+    }
+    return html;
+  };
+
+  var _origEnRenderFileList = enRenderFileList;
+  enRenderFileList = async function(moduleType){
+    await _origEnRenderFileList(moduleType);
+    if (moduleType === 'reading' || moduleType === 'grammar') {
+      await enReaderRenderList(moduleType);
+    }
+  };
+
+  var _origRenderEnglishCenter = renderEnglishCenter;
+  renderEnglishCenter = async function(){
+    await _origRenderEnglishCenter();
+    await enReaderInjectStats();
+    if (activeEnglishModule === 'review') {
+      await enReaderRenderStats();
+    }
+  };
+
+  var _origEnRenderReview = enRenderReview;
+  enRenderReview = async function(){
+    var result = await _origEnRenderReview();
+    await enReaderRenderStats();
+    return result;
+  };
+
+  async function enReaderRenderList(moduleType){
+    if (!moduleType) return;
+    var root = document.getElementById('enFileList-' + moduleType);
+    if (!root) return;
+    var listId = 'enEpubList-' + moduleType;
+    var listWrap = document.getElementById(listId);
+    if (!listWrap) {
+      listWrap = document.createElement('div');
+      listWrap.id = listId;
+      listWrap.className = 'en-reader-epub-list';
+      root.parentNode.insertBefore(listWrap, root.nextSibling);
+    }
+    var items = await enReaderGetIndex(moduleType);
+    if (!items.length) {
+      listWrap.innerHTML = '<div class="empty-state">暂无 EPUB</div>';
+      return;
+    }
+    listWrap.innerHTML = items.map(function(item){
+      var cover = item.cover ? ('<img class="en-reader-book-cover" src="' + escapeHtml(item.cover) + '" alt="cover">') : '<div class="en-reader-book-cover"></div>';
+      return '<div class="en-reader-book-item" onclick="window.enReaderOpen(\'' + item.id + '\', \'' + moduleType + '\')">' +
+        '<div>' + cover + '</div>' +
+        '<div class="en-reader-book-meta">' +
+        '  <div class="en-reader-book-title">' + escapeHtml(item.title || '未命名') + '</div>' +
+        '  <div class="en-reader-book-info">作者：' + escapeHtml(item.author || '未知作者') + '</div>' +
+        '  <div class="en-reader-book-info">章节：' + Number(item.chapterCount || 0) + ' · ' + new Date(item.createdAt || Date.now()).toLocaleString() + '</div>' +
+        '</div>' +
+        '<div class="en-reader-book-actions"><button class="en-reader-book-delete" type="button" onclick="event.stopPropagation(); window.enReaderDeleteEpub(\'' + item.id + '\', \'' + moduleType + '\');">删除</button></div>' +
+        '</div>';
+    }).join('');
+  }
+
+  window.enReaderRenderList = enReaderRenderList;
+  window.enReaderUploadEpub = enReaderUploadEpub;
+  window.enReaderImportEpub = enReaderImportEpub;
+  window.enReaderOpen = enReaderOpen;
+  window.enReaderClose = enReaderClose;
+  window.enReaderShowUrlDialog = enReaderShowUrlDialog;
+  window.enReaderFetchUrls = enReaderFetchUrls;
+  window.enReaderLookup = enReaderLookup;
+  window.enReaderRenderDictCard = enReaderRenderDictCard;
+  window.enReaderRenderStats = enReaderRenderStats;
+  window.enReaderAddToVocab = enReaderAddToVocab;
+  window.enReaderDeleteEpub = enReaderDeleteEpub;
+  window.enReaderCycleTheme = enReaderCycleTheme;
+  window.enReaderChangeFont = enReaderChangeFont;
+  window.enReaderNextPage = function(){
+    var state = window.__enReaderState || {};
+    if (state.rendition && state.rendition.next) state.rendition.next();
+  };
+  window.enReaderPrevPage = function(){
+    var state = window.__enReaderState || {};
+    if (state.rendition && state.rendition.prev) state.rendition.prev();
+  };
+  window.enReaderNextChapter = function(){
+    var state = window.__enReaderState || {};
+    if (state.rendition && state.rendition.next) state.rendition.next();
+  };
+  window.enReaderPrevChapter = function(){
+    var state = window.__enReaderState || {};
+    if (state.rendition && state.rendition.prev) state.rendition.prev();
+  };
+
+  document.addEventListener('keydown', function(event){
+    if (!document.getElementById('enReaderOverlay') || !document.getElementById('enReaderOverlay').classList.contains('show')) return;
+    if (event.key === 'ArrowRight') { if (window.enReaderNextPage) window.enReaderNextPage(); }
+    if (event.key === 'ArrowLeft') { if (window.enReaderPrevPage) window.enReaderPrevPage(); }
+    if (event.key === 'Escape') { enReaderClose(); }
+  });
+
+  console.log('✅ 英语原版阅读增强已装载：EPUB / 划词 / URL 抓取 / 阅读统计');
 })();
 </script>
 </body>
