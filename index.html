@@ -3731,6 +3731,7 @@ let activeZone = 'gk';
 let activeFile = '__all__';   // '__all__' 表示显示本分区全部文件合并
 let currentPage = 1;
 let filteredQuestions = [];
+var _wrongRecencyRenderGeneration=0;
 const multiChoiceSelections = Object.create(null);
 let restoredStudyPosition = null;
 let filterState = {
@@ -5201,6 +5202,46 @@ async function loadView(){
 // —— 错题集 / 收藏 / 每日 / 考试（均迁 IndexedDB） ——
 async function loadWrong(){ const r=await idbGet('wrong'); if(r) wrongSet=r; ZONE_IDS.forEach(function(z){ if(!wrongSet[z]||typeof wrongSet[z]!=='object') wrongSet[z]={}; }); }
 function saveWrong(){ return idbSet('wrong', wrongSet); }
+
+function recordQuestionAnswerTime(q){
+  if(!q) return Promise.resolve(false);
+  const qid=q._qid||generateQuestionId(q);
+  if(!qid) return Promise.resolve(false);
+  return idbSet('answerTime:'+qid,Date.now()).then(function(ok){
+    if(!ok) console.error('作答时间戳写入失败 qid='+qid);
+    return ok;
+  });
+}
+async function getAnswerTimeByQid(qid){
+  if(!qid) return 0;
+  const value=await idbGet('answerTime:'+qid);
+  return typeof value==='number'&&Number.isFinite(value)?value:0;
+}
+async function getAnswerTimesForQuestions(questions){
+  const result={};
+  const list=Array.isArray(questions)?questions:[];
+  for(let i=0;i<list.length;i++){
+    const q=list[i];
+    if(!q) continue;
+    const qid=q._qid||generateQuestionId(q);
+    if(!qid) continue;
+    result[qid]=await getAnswerTimeByQid(qid);
+  }
+  return result;
+}
+async function removeAnswerTimesForQuestions(questions){
+  const list=Array.isArray(questions)?questions:[];
+  let ok=true;
+  for(let i=0;i<list.length;i++){
+    const q=list[i];
+    if(!q) continue;
+    const qid=q._qid||generateQuestionId(q);
+    if(!qid) continue;
+    const saved=await idbDel('answerTime:'+qid);
+    if(saved!==true) ok=false;
+  }
+  return ok;
+}
 
 // —— 复盘系统持久化（独立 IndexedDB key 'review'，不影响任何旧数据） ——
 async function loadReview(){
@@ -6843,6 +6884,7 @@ function prepareQuestion(zone, f, q, qi){
     if(!viewRecordIsPrimitive(q[k])) continue;          // array / object 永不进记录
     p[k] = q[k];
   }
+  p._qid=q._qid||generateQuestionId(q);
   p.correctRatio = getQuestionCorrectRatio(q);
   try{ p._qzCorrectRaw = getCorrectLetter(q); }catch(e){ p._qzCorrectRaw = ''; }
   try{ p._qzMulti = isMultipleChoice(q) === true; }catch(e){ p._qzMulti = false; }
@@ -7239,6 +7281,7 @@ function buildEssayPreparedFile(zone, f){
     orderedQuestions.forEach((question,questionIndex)=>{
       const key='f'+f.id+'_p'+paperIndex+'_q'+questionIndex;
       arr.push(Object.assign({},question,{
+        _qid:question._qid||generateQuestionId(question),
         _fileId:f.id,
         _paperIndex:paperIndex,
         _qi:questionIndex,
@@ -8305,6 +8348,21 @@ function getFiltered(skipSort){
       });
     }
   }
+  return qs;
+}
+
+async function getFilteredWithRecency(skipSort){
+  const qs=getFiltered(skipSort);
+  if(skipSort||filterState.status!=='wrong') return qs;
+  const times=await getAnswerTimesForQuestions(qs);
+  qs.sort(function(a,b){
+    const ta=times[a._qid||generateQuestionId(a)]||0;
+    const tb=times[b._qid||generateQuestionId(b)]||0;
+    if(!ta&&tb) return 1;
+    if(ta&&!tb) return -1;
+    if(!ta&&!tb) return 0;
+    return tb-ta;
+  });
   return qs;
 }
 
@@ -9758,10 +9816,23 @@ function renderQuestions(){
   //   为什么必须在 getFiltered() 之前：视图未就绪时 getFiltered() 只能看到已建记录的那部分文件，
   //   数量/顺序/分页都会错。ensureZoneView 绝不 reject（失败只标记）⇒ 不会无限重入。
   if(!zoneViewReady(activeZone)){
-    ensureZoneView(activeZone).then(function(){ renderQuestions(); });
+    ensureZoneView(activeZone).then(function(){ return renderQuestions(); });
     return;
   }
+  if(filterState.status==='wrong'){
+    const request=++_wrongRecencyRenderGeneration;
+    return getFilteredWithRecency().then(function(qs){
+      if(request!==_wrongRecencyRenderGeneration||filterState.status!=='wrong') return;
+      filteredQuestions=qs;
+      return renderQuestionsAfterFilter();
+    }).catch(function(e){ console.error('错题作答时间读取失败:',e); });
+  }
+  _wrongRecencyRenderGeneration++;
   filteredQuestions = getFiltered();
+  return renderQuestionsAfterFilter();
+}
+
+function renderQuestionsAfterFilter(){
   // Step 0（2026-09-27）：此处原有一行 window.filteredQuestions = filteredQuestions;，已移除。
   // 依据与实测见 7854 附近的说明：只写不读的冗余全局强引用；移除后堆无变化（0.0MB），
   // 但可避免「释放 db 时只清词法绑定、保留根仍在 window 上」这一不可见失败模式。
@@ -9827,14 +9898,12 @@ function renderQuestions(){
   //   因此搜索不再把整分区正文读回内存。
   //                  ② 否则只为「当前页涉及的 file」加载正文，然后挂载这些记录的正文。 ——
   if(filtersNeedBody() && !zoneBodiesAllLoaded(activeZone)){
-    ensureFilesLoaded(activeZone).then(function(){ renderQuestions(); });
-    return;
+    return ensureFilesLoaded(activeZone).then(function(){ return renderQuestions(); });
   }
   {
     const needFiles = filesNeededForPage(activeZone, renderItems, start, end);
     if(needFiles.length){
-      ensureFilesLoaded(activeZone, needFiles).then(function(){ renderQuestions(); });
-      return;
+      return ensureFilesLoaded(activeZone, needFiles).then(function(){ return renderQuestions(); });
     }
     // 正文已在内存 ⇒ 把本页记录的 content/solution/accessories/material 挂回来再渲染
     materializeViewRange(filteredQuestions, start, end);
@@ -10347,6 +10416,7 @@ function selectOption(key, letter, event){
   saveWrong();
   // 复盘系统：独立记录，不影响 wrongSet
   recordNormalAttempt(activeZone, key, correct);
+  recordQuestionAnswerTime(item);
   recordAnswerTiming();
   incDaily();
   item._answered=letter;
@@ -10404,6 +10474,7 @@ function submitMultipleChoice(key){
   saveWrong();
   // 复盘系统：独立记录，不影响 wrongSet
   recordNormalAttempt(activeZone, key, isCorrect);
+  recordQuestionAnswerTime(item);
   recordAnswerTiming();
   incDaily();
   const questionEl = document.getElementById('q-'+key);
@@ -10467,7 +10538,7 @@ function submitMultipleChoice(key){
   updateWrongCount();
 }
 
-function goPage(p){ const total=Math.ceil(filteredQuestions.length/PAGE_SIZE); if(p<1||p>total) return; stopSpeaking(); currentPage=p; renderQuestions(); scrollToFirstQuestion(); }
+function goPage(p){ const total=Math.ceil(filteredQuestions.length/PAGE_SIZE); if(p<1||p>total) return; stopSpeaking(); currentPage=p; const rendered=renderQuestions(); if(rendered&&typeof rendered.then==='function') rendered.then(scrollToFirstQuestion); else scrollToFirstQuestion(); }
 
 // 翻页后滚动到本页第一道题（而不是页面最顶部），让用户直接看到题目。
 // 用 requestAnimationFrame 等一帧，确保 renderQuestions() 的 DOM 已就绪。
@@ -10484,7 +10555,9 @@ function scrollToFirstQuestion(){
 // 文件管理
 // ============================================================
 function removeFile(id){
-  showConfirm('确定移除该文件？此操作会删除该文件及其做题进度。', ()=>{
+  showConfirm('确定移除该文件？此操作会删除该文件及其做题进度。', async ()=>{
+    const affectedQuestions=getZoneQuestions(activeZone,'__all__').filter(function(q){ return String(q._fileId)===String(id); });
+    if(!await removeAnswerTimesForQuestions(affectedQuestions)){ alert('作答时间戳清理失败，未删除文件'); return; }
     if(activeFile===id) activeFile='__all__';
     delete db[activeZone][id];
     bumpDbEpoch();
@@ -10500,7 +10573,8 @@ function removeFile(id){
   });
 }
 function clearAllFiles(){
-  showConfirm('清空本分区「'+zoneName(activeZone)+'」的全部文件？此操作不可撤销。', ()=>{
+  showConfirm('清空本分区「'+zoneName(activeZone)+'」的全部文件？此操作不可撤销。', async ()=>{
+    if(!await removeAnswerTimesForQuestions(getZoneQuestions(activeZone,'__all__'))){ alert('作答时间戳清理失败，未清空分区'); return; }
     index[activeZone].forEach(function(m){ try{ idbDel('file:'+activeZone+':'+m.id); }catch(e){} deleteQuestionState(activeZone, m.id); deleteMetaIndex(activeZone, m.id); });
     index[activeZone]=[]; db[activeZone]={}; activeFile='__all__';
     bumpDbEpoch();
@@ -10508,7 +10582,8 @@ function clearAllFiles(){
   });
 }
 function resetProgress(){
-  showConfirm('重置本分区所有做题进度？已作答记录将清空。', ()=>{
+  showConfirm('重置本分区所有做题进度？已作答记录将清空。', async ()=>{
+    if(!await removeAnswerTimesForQuestions(getZoneQuestions(activeZone,'__all__'))){ alert('作答时间戳清理失败，未重置进度'); return; }
     // Step 1：清空进度写的是「空 state」而不是删 state 键。
     //   若删键，下次启动会因为 state 缺失而回退去读 file.answered（旧快照）⇒ 已清空的进度复活。
     Object.values(db[activeZone]).forEach(f=>{ f.answered={}; saveQuestionStates(activeZone, f.id, {}); });
@@ -11697,6 +11772,25 @@ async function exportBackup(){
       });
     });
   });
+
+  const answerTimeExport = {};
+  for(const zone of ZONE_IDS){
+    for(const fileId of Object.keys(db[zone]||{})){
+      const f=db[zone][fileId];
+      if(!f||!f.questions) continue;
+      for(let qi=0;qi<f.questions.length;qi++){
+        const q=f.questions[qi];
+        if(!q) continue;
+        const key='f'+fileId+'_q'+qi;
+        const answer=f.answered&&f.answered[key];
+        if(answer===undefined||answer===null) continue;
+        const qid=q._qid||generateQuestionId(q);
+        if(!qid) continue;
+        const timestamp=await getAnswerTimeByQid(qid);
+        if(timestamp>0) answerTimeExport[qid]=timestamp;
+      }
+    }
+  }
   
   // 构建完整备份对象
   let essayNotesExport = {};
@@ -11713,6 +11807,7 @@ async function exportBackup(){
     chatHistory: chatHistory,
     questionNotes: questionNotesExport,
     essayNotes: essayNotesExport,
+    answerTimeMap: answerTimeExport,
     view: { activeZone, activeFile }
   };
   
@@ -11783,6 +11878,18 @@ async function importBackupFromObject(data){
     // 第二步：遍历备份数据，用 qid 匹配并恢复做题记录
     let matchedCount = 0, skippedCount = 0;
     const backupData = data.data || {};
+    let answerTimeRestoreFailed=false;
+    if(data.answerTimeMap&&typeof data.answerTimeMap==='object'){
+      for(const qid of Object.keys(data.answerTimeMap)){
+        const timestamp=Number(data.answerTimeMap[qid]);
+        if(!qid||!Number.isFinite(timestamp)||timestamp<=0) continue;
+        const existing=await getAnswerTimeByQid(qid);
+        if(timestamp>existing&&!await idbSet('answerTime:'+qid,timestamp)){
+          console.error('作答时间戳恢复失败 qid='+qid);
+          answerTimeRestoreFailed=true;
+        }
+      }
+    }
     
     ZONE_IDS.forEach(zone => {
       Object.keys(backupData[zone] || {}).forEach(fileId => {
@@ -12055,6 +12162,7 @@ async function importBackupFromObject(data){
     // 显示恢复结果
     let resultMsg = `✅ 恢复完成！\n匹配成功 ${matchedCount} 题，跳过 ${skippedCount} 题（未找到对应题目）\n恢复错题集 ${wrongSetRestored} 题；恢复收藏 ${favoritesRestored} 题；恢复做题次数 ${attemptsRestored} 题；恢复AI对话 ${chatRestored} 条；恢复心得 ${notesRestored} 条；恢复申论笔记 ${essayNotesRestored} 条`;
     if (notesSkipped > 0) resultMsg += `\n（${notesSkipped} 条心得因题目未找到已跳过）`;
+    if(answerTimeRestoreFailed) resultMsg += '\n作答时间戳写入失败，其他做题记录已恢复';
     alert(resultMsg);
     return;
   }
@@ -12126,7 +12234,19 @@ async function importBackupFromObject(data){
   let totalQ=0, totalFiles=0;
   ZONE_IDS.forEach(z=>{ Object.keys(newDb[z]||{}).forEach(id=>{ totalFiles++; totalQ+=(newDb[z][id].questions.length||0); }); });
   if(!totalFiles){ alert('备份中没有可恢复的文件数据'); return; }
-  showConfirm('导入「'+fromLabel+'」将覆盖当前所有分区的数据与做题进度，确定继续？', ()=>{
+  showConfirm('导入「'+fromLabel+'」将覆盖当前所有分区的数据与做题进度，确定继续？', async ()=>{
+  if(!await idbDeleteByPrefix('answerTime:')){ alert('清理旧作答时间戳失败，未导入备份'); return; }
+  if(data.answerTimeMap&&typeof data.answerTimeMap==='object'){
+    for(const qid of Object.keys(data.answerTimeMap)){
+      const timestamp=Number(data.answerTimeMap[qid]);
+      if(!qid||!Number.isFinite(timestamp)||timestamp<=0) continue;
+      if(!await idbSet('answerTime:'+qid,timestamp)){
+        console.error('作答时间戳恢复失败 qid='+qid);
+        alert('作答时间戳恢复失败，未导入备份');
+        return;
+      }
+    }
+  }
   index=newIndex; db=newDb;
   ZONE_IDS.forEach(z=>{ if(!Array.isArray(index[z])) index[z]=[]; if(typeof db[z]!=='object'||!db[z]) db[z]={}; });
   ZONE_IDS.forEach(z=>{ if(_prepFiles[z]) _prepFiles[z]={}; });
@@ -18033,7 +18153,7 @@ document.addEventListener('pageshow', function() {
   window.examRefresh=examRefresh;
   window.examResume=function(mode){if(examRestore(mode)){examState.phase='question';examRenderFullscreen();}};
   window.examRenderFullscreen=function(){examRender(examState.mode);};
-  window.examSelectOption=function(key,letter){if(examState.phase!=='question')return;var q=examState.questions[examState.index],next=letter;if(q&&isMultipleChoice(q)){var letters=normalizeAnswerLetters(examState.answers[key]),at=letters.indexOf(letter);if(at>=0)letters.splice(at,1);else letters.push(letter);letters.sort();next=letters.join(',');}if(next)examState.answers[key]=next;else delete examState.answers[key];if(q&&q._zone&&db[q._zone]&&db[q._zone][q._fileId]){if(next)saveQuestionState(q._zone,q._fileId,key,next);else removeQuestionState(q._zone,q._fileId,key);}examSaveProgress();examRenderQuestion();};
+  window.examSelectOption=function(key,letter){if(examState.phase!=='question')return;var q=examState.questions[examState.index],next=letter;if(q&&isMultipleChoice(q)){var letters=normalizeAnswerLetters(examState.answers[key]),at=letters.indexOf(letter);if(at>=0)letters.splice(at,1);else letters.push(letter);letters.sort();next=letters.join(',');}if(next)examState.answers[key]=next;else delete examState.answers[key];if(next)recordQuestionAnswerTime(q);if(q&&q._zone&&db[q._zone]&&db[q._zone][q._fileId]){if(next)saveQuestionState(q._zone,q._fileId,key,next);else removeQuestionState(q._zone,q._fileId,key);}examSaveProgress();examRenderQuestion();};
   window.examGoTo=function(index){if(index<0||index>=examState.questions.length)return;examState.index=index;examSaveProgress();examRenderQuestion();};
   window.examSubmitPaper=function(auto){if(!auto){var unanswered=examState.questions.length-Object.keys(examState.answers).length;if(unanswered&&!confirm('还有 '+unanswered+' 题未作答，确定交卷吗？'))return;}if(examState.timerId)clearInterval(examState.timerId);examState.result=calculateScore(examState.mode,examState.answers,examState.questions);examSaveHistory(examState.mode,examState.questions.map(function(q){return q._key;}));try{localStorage.removeItem('exam_progress_'+examState.mode);}catch(e){}examState.phase='result';examRenderResult();};
   window.examExportPDF=function(){window.print();};
@@ -18468,6 +18588,7 @@ function selectJudgeOption(key, value){
   if(!wrongSet[activeZone]) wrongSet[activeZone] = {};
   if(known && !correct){ wrongSet[activeZone][key] = true; if(navigator.vibrate) navigator.vibrate(15); }
   saveWrong();
+  recordQuestionAnswerTime(item);
   if(known){ try{ recordNormalAttempt(activeZone, key, correct); }catch(e){} }
   try{ recordAnswerTiming(); }catch(e){}
   try{ incDaily(); }catch(e){}
@@ -18559,6 +18680,11 @@ function enhanceJudgeQuestions(){
 
 renderQuestions = function(){
   var r = _origRenderQuestions.apply(this, arguments);
+  if(r && typeof r.then === 'function'){
+    return r.then(function(){
+      try{ enhanceJudgeQuestions(); }catch(e){ console.warn('[判断题增强]', e); }
+    });
+  }
   try{ enhanceJudgeQuestions(); }catch(e){ console.warn('[判断题增强]', e); }
   return r;
 };
