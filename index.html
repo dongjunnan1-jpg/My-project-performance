@@ -13431,7 +13431,11 @@ function saveAISettings(){
   aiConfig.enableThinking = document.getElementById('aiThinkingToggle')?.checked || false;
   saveAIConfig();
   toggleAIPanel();
-  alert('AI 配置已保存');
+  // 修复：用页面内非阻塞 toast 替代原生 alert()。
+  // 原生 alert 是同步模态弹窗：弹窗期间 JS 事件循环被暂停（setTimeout 驱动的声音
+  // 如机械时钟/风铃/番茄钟会停），在 Safari/iOS/微信 上还会把 AudioContext 打成
+  // interrupted 使背景音停止。换成 toast 后，保存配置不再打断正在播放的背景音。
+  if (typeof mlToast === 'function') mlToast('✅ AI 配置已保存');
 }
 async function detectProxy() {
   const log = document.getElementById('scrollDiagLog');
