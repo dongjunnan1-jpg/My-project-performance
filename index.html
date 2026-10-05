@@ -13330,12 +13330,15 @@ function loadAIConfig(){
   const thinkingToggle=document.getElementById('aiThinkingToggle');
   if(thinkingToggle) thinkingToggle.checked = !!aiConfig.enableThinking;
 }
-function saveAIConfig(){ try{ localStorage.setItem(AI_KEY, JSON.stringify(aiConfig)); }catch(e){} }
+function saveAIConfig(){ try{ localStorage.setItem(AI_KEY, JSON.stringify(aiConfig)); return true; }catch(e){ console.error('[AI] 保存配置失败:', e); return false; } }
 function saveCurrentAIProviderConfig(){
   const provider=aiConfig.provider;
   if(!provider) return;
-  const key=(document.getElementById('aiKey').value||'').trim();
-  const model=(document.getElementById('aiModel').value||'').trim();
+  const keyEl=document.getElementById('aiKey');
+  const modelEl=document.getElementById('aiModel');
+  if(!keyEl||!modelEl) throw new Error('AI 设置面板元素缺失(aiKey/aiModel)，请刷新页面后重试');
+  const key=(keyEl.value||'').trim();
+  const model=(modelEl.value||'').trim();
   aiConfig.providerConfigs=aiConfig.providerConfigs||{};
   aiConfig.providerConfigs[provider]={apiKey:key,model:model};
   aiConfig.apiKey=key;
@@ -13349,10 +13352,13 @@ function handleAIProviderChange(){
   const providerConfig=aiConfig.providerConfigs[aiConfig.provider]||{};
   aiConfig.apiKey=providerConfig.apiKey||'';
   aiConfig.model=providerConfig.model||'';
-  document.getElementById('aiKey').value=aiConfig.apiKey;
+  const keyEl=document.getElementById('aiKey');
+  const modelEl=document.getElementById('aiModel');
+  if(!keyEl||!modelEl) throw new Error('AI 设置面板元素缺失(aiKey/aiModel)，请刷新页面后重试');
+  keyEl.value=aiConfig.apiKey;
   const saved=(aiConfig.models&&aiConfig.models[aiConfig.provider])||aiConfig.model||'';
   const fallback=(AI_ENDPOINTS[aiConfig.provider]&&AI_ENDPOINTS[aiConfig.provider].model)||'';
-  document.getElementById('aiModel').value=saved||fallback;
+  modelEl.value=saved||fallback;
   saveAIConfig();
 }
 function formatAIResponse(text){ return String(text||'').replace(/。/g, '。\n'); }
@@ -13483,17 +13489,28 @@ function restoreAIHistoryForVisibleQuestions(){
 }
 function toggleAIPanel(){ const p=document.getElementById('aiPanel'); if(p) p.classList.toggle('show'); }
 function saveAISettings(){
-  aiConfig.provider=document.getElementById('aiProvider').value;
-  saveCurrentAIProviderConfig();
-  aiConfig.enableSearch = document.getElementById('aiSearchToggle')?.checked || false;
-  aiConfig.enableThinking = document.getElementById('aiThinkingToggle')?.checked || false;
-  saveAIConfig();
-  toggleAIPanel();
-  // 修复：用页面内非阻塞 toast 替代原生 alert()。
-  // 原生 alert 是同步模态弹窗：弹窗期间 JS 事件循环被暂停（setTimeout 驱动的声音
-  // 如机械时钟/风铃/番茄钟会停），在 Safari/iOS/微信 上还会把 AudioContext 打成
-  // interrupted 使背景音停止。换成 toast 后，保存配置不再打断正在播放的背景音。
-  if (typeof mlToast === 'function') mlToast('✅ AI 配置已保存');
+  try{
+    const providerEl=document.getElementById('aiProvider');
+    if(!providerEl) throw new Error('AI 设置面板元素缺失(aiProvider)，请刷新页面后重试');
+    aiConfig.provider=providerEl.value;
+    saveCurrentAIProviderConfig();
+    const searchEl=document.getElementById('aiSearchToggle');
+    const thinkingEl=document.getElementById('aiThinkingToggle');
+    aiConfig.enableSearch = searchEl ? !!searchEl.checked : false;
+    aiConfig.enableThinking = thinkingEl ? !!thinkingEl.checked : false;
+    if(!saveAIConfig()) throw new Error('浏览器本地存储写入失败(localStorage 不可用/已满/被禁用)，配置未保存');
+    const panel=document.getElementById('aiPanel');
+    if(panel) panel.classList.remove('show');
+    // 修复：用页面内非阻塞 toast 替代原生 alert()。
+    // 原生 alert 是同步模态弹窗：弹窗期间 JS 事件循环被暂停（setTimeout 驱动的声音
+    // 如机械时钟/风铃/番茄钟会停），在 Safari/iOS/微信 上还会把 AudioContext 打成
+    // interrupted 使背景音停止。换成 toast 后，保存配置不再打断正在播放的背景音。
+    if (typeof mlToast === 'function') mlToast('✅ AI 配置已保存');
+  }catch(e){
+    console.error('[AI] 保存配置失败:', e);
+    if(typeof mlToast === 'function') mlToast('❌ AI 配置保存失败：'+(e&&e.message||e));
+    else if(typeof alert === 'function') alert('❌ AI 配置保存失败：'+(e&&e.message||e));
+  }
 }
 async function detectProxy() {
   const log = document.getElementById('scrollDiagLog');
