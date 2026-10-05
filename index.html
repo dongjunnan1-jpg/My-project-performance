@@ -20303,8 +20303,8 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       input.onchange = function(){
         var file = this.files && this.files[0];
         if (!file) return;
-        if (file.size > 20 * 1024 * 1024) {
-          showConfirm('当前 EPUB 大于 20MB，解析和加载时间可能较长，是否继续？', function(){
+        if (file.size > 100 * 1024 * 1024) {
+          showConfirm('当前 EPUB 大于 100MB，解析和加载时间可能较长，是否继续？', function(){
             enReaderImportEpub(file, moduleType);
           });
           input.value = '';
