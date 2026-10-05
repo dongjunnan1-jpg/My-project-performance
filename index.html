@@ -13615,16 +13615,57 @@ async function detectProxy() {
 
   log.innerHTML = html.replace(/\n/g, '<br>');
 }
+// ============================================================
+// AI 简化解析 Prompt 重构：CORE + TYPE_STRATEGY + OUTPUT_FORMAT
+// 政治理论沿用原成熟规则；其他题型用各自策略。仅改 AI Prompt/上下文。
+// ============================================================
+const AI_SIMPLIFY_CORE = '你是公考辅导老师，擅长按题型选择正确解题思路。综合题目、选项、正确答案、原解析和当前题型生成简洁易懂的解析。原解析只作知识来源和校验依据，不机械改写、不完全忽略。只输出最终结构化解析，不输出内部思考过程。禁止 Markdown 表格。';
+function getSimplifyTypeInfo(item){
+  try{
+    var module = '';
+    try{ module = normalizeModuleName(getQuestionBigCategory(item) || item.bigCategory || item.category || item.module || ''); }catch(e){ module = ''; }
+    if(!module) module = '未分类';
+    var sub = '';
+    try{ sub = getQuestionSubType(item) || item.leafCategory || item.subType || item.subCategory || ''; }catch(e){ sub = ''; }
+    sub = String(sub || '').trim();
+    if(!sub) sub = '未分类';
+    return { module: module, subType: sub };
+  }catch(e){ return { module: '未分类', subType: '未分类' }; }
+}
+function resolveSimplifyStrategyKey(module, subType){
+  var m = String(module || '');
+  var s = String(subType || '');
+  if(!m || m === '未分类' || s === '未分类') return 'unclassified';
+  if(m.indexOf('政治理论') !== -1) return 'politics';
+  if(m.indexOf('常识') !== -1) return 'changshi';
+  if(m.indexOf('言语') !== -1) return 'verbal';
+  if(m.indexOf('数量') !== -1) return 'math';
+  if(m.indexOf('判断推理') !== -1) return 'logic';
+  if(m.indexOf('资料') !== -1) return 'data';
+  return 'generic';
+}
 // 普通模式：格式约束直接贯穿全程（= 现在用的那套）
-const NORMAL_PROMPT = '你是公考辅导老师。请用"分点+缩进"的纯文本格式解释这道题，禁止使用 Markdown 表格。\n\n第一步：先判断题型，分三种：\n· 普通选择题：题干 + A/B/C/D 四个选项，答案是字母\n· 纯判断题：无选项，答案是"对/错"或"全部正确/第N项错误"\n· 判断项数量题：题干里含 ①②③④ 等表述，问"有几项正确"，选项是 A.1项 B.2项 C.3项 D.4项，答案是字母\n\n第二步：按对应格式输出，顺序固定，标题必须原样保留：\n\n【正确答案】\n· 普通选择题、判断项数量题：只写字母，如 B必须、C\n· 纯判断题：写"对"或"错"，或"全部正确/第N项错误"\n\n【逐项分析】\n· 普通选择题：每个选项单独一行，格式为：\n· 正确项：字母 ✅ [说明它为什么对]\n· 错误项：字母 ❌ 应为[正确内容]，而不是[选项实际写的错误内容]。错误项必须用「应为……而不是……」句式，把正确内容和错误内容对照说明，不能只写「应为xxx」这种短句。\n示例：\nA ✅ 建立省级独角兽企业培育机制\nB ❌ 应为质量托底，而不是效率托底\nC ✅ 健全专精特新企业赋能体系\nD ✅ 推动孵化载体专业化发展\n· 纯判断题：只写一句说明对错原因，不列序号、不列 A/B/C/D。判断题不列 A/B/C/D，【逐项分析】直接写对错原因。\n· 判断项数量题：先逐项判断 ①②③④（每项一行，格式为：序号 ✅/❌ 一句话理由），最后一行总结："综上，正确的有 N 项，选 X"\n\n【题型】一句话说明这是哪种题型\n【关键】一句话点破破题点\n【易错提醒】一句话（没有就不写这一行）\n\n加粗规则（非常重要）：\n关键概念、地区名、政策名、文件名、会议名、时间节点、易错词，必须用 **双星号** 包住，例如 **压舱石**、**东北**、**绿色低碳高质量发展先行区**。每道题加粗 3-8 处，不要整句加粗。\n\n硬性要求：\n1. 不写客套话，不重复题干，不写"这道题考查的是"之类的开场白；\n2. 逐项分析必须覆盖每一项，不能漏项、不能合并；\n3. 【字数铁律】全文总字数绝对不得超过 350 字。能 250 字说清的，就绝不写到 350 字；能 150 字说清的，就绝不写到 250 字。宁可少说，不可多说。必须写完整，结尾要有句号，不能中途断掉；\n4. 只输出上述结构内容，不要额外加标题、总结段或分隔线。';
+const NORMAL_PROMPT = '你是公考辅导老师。请用"分点+缩进"的纯文本格式解释这道题，禁止使用 Markdown 表格。\n\n第一步：先判断题型，分三种：\n· 普通选择题：题干 + A/B/C/D 四个选项，答案是字母\n· 纯判断题：无选项，答案是"对/错"或"全部正确/第N项错误"\n· 判断项数量题：题干里含 ①②③④ 等表述，问"有几项正确"，选项是 A.1项 B.2项 C.3项 D.4项，答案是字母\n\n第二步：按对应格式输出，顺序固定，标题必须原样保留：\n\n【正确答案】\n· 普通选择题、判断项数量题：只写字母，如 B必须、C\n· 纯判断题：写"对"或"错"，或"全部正确/第N项错误"\n\n【逐项分析】\n· 普通选择题：每个选项单独一行，格式为：\n· 正确项：字母 ✅ [说明它为什么对]\n· 错误项：字母 ❌ 应为[正确内容]，而不是[选项实际写的错误内容]。错误项必须用「应为……而不是……」句式，把正确内容和错误内容对照说明，不能只写「应为xxx」这种短句。\n示例：\nA ✅ 建立省级独角兽企业培育机制\nB ❌ 应为质量托底，而不是效率托底\nC ✅ 健全专精特新企业赋能体系\nD ✅ 推动孵化载体专业化发展\n· 纯判断题：只写一句说明对错原因，不列序号、不列 A/B/C/D。判断题不列 A/B/C/D，【逐项分析】直接写对错原因。\n· 判断项数量题：先逐项判断 ①②③④（每项一行，格式为：序号 ✅/❌ 一句话理由），最后一行总结："综上，正确的有 N 项，选 X"\n\n【题型】一句话说明这是哪种题型\n【关键】一句话点破破题点\n【易错提醒】一句话（没有就不写这一行）\n\n加粗规则（非常重要）：\n关键概念、地区名、政策名、文件名、会议名、时间节点、易错词，必须用 **双星号** 包住，例如 **压舱石**、**东北**、**绿色低碳高质量发展先行区**。每道题加粗 3-8 处，不要整句加粗。\n\n硬性要求：\n1. 不写客套话，不重复题干，不写"这道题考查的是"之类的开场白；\n2. 逐项分析必须覆盖每一项，不能漏项、不能合并；\n3. 【字数铁律】全文总字数绝对不得超过 300 字。能 200 字说清的，就绝不写到 300 字；能 150 字说清的，就绝不写到 200 字。宁可少说，不可多说。必须写完整，结尾要有句号，不能中途断掉；\n4. 只输出上述结构内容，不要额外加标题、总结段或分隔线。';
 
 // 思考模式：允许在"推理阶段"想清楚，但"最终输出"格式和不勾时【完全一样】。
 // 要点：把"分析"和"输出"分两段说，明确告诉 AI——
 //   推理内容随便想，但 content 里只输出结构化的最终答案，且加粗不能省。
-const THINKING_PROMPT = '你是公考辅导老师。\n\n【第一步：分析】\n先在心里分析这道题：判断题型、找正确答案、逐个选项想清楚对错理由、总结关键与易错点。这一步可以在你的推理内容里尽情展开，不用受格式限制。\n\n【第二步：输出最终答案】\n分析完成后，严格按照下面的格式输出最终答案。最终输出的格式和不勾思考模式时完全一致，一个字都不能省。\n\n格式结构（顺序固定，标题必须原样保留）：\n【正确答案】普通选择题/判断项数量题只写字母，如 B、C；纯判断题写"对/错"或"全部正确/第N项错误"\n【逐项分析】\n· 每一项都必须独占一行，不能把多项挤在同一行，不能用空格代替换行；\n· 普通选择题：每个选项单独一行，格式为：正确项用字母 ✅ 一句话说明它为什么对，错误项用字母 ❌ 应为[正确内容]，而不是[选项实际写的错误内容]。错误项必须用「应为……而不是……」句式，把正确内容和错误内容对照说明，不能只写「应为xxx」这种短句，例如：\n  A ✅ 建立省级独角兽企业培育机制\n  B ✅ 健全专精特新企业赋能体系\n  C ❌ 应为向上下游延伸，而不是只向下游延伸，选项漏了「上」字\n  D ✅ 推动孵化载体专业化发展\n· 纯判断题：只写一句说明对错原因，不列序号、不列 A/B/C/D。判断题不列 A/B/C/D，【逐项分析】直接写对错原因；\n· 判断项数量题：先逐项判断（每项一行），最后一行总结"综上，正确的有 N 项，选 X"。\n【题型】一句话说明这是哪种题型\n【关键】一句话点破破题点\n【易错提醒】一句话（没有就不写这一行）\n\n加粗规则（非常重要，不能省）：\n关键概念、地区名、政策名、文件名、会议名、时间节点、易错词，必须用 **双星号** 包住，例如 **压舱石**、**东北**、**绿色低碳高质量发展先行区**。每道题加粗 3-8 处，不要整句加粗。\n\n硬性要求：\n1. 不写客套话，不重复题干，不写"这道题考查的是"之类的开场白；\n2. 逐项分析必须覆盖每一项，不能漏项、不能合并；\n3. 【字数铁律】最终输出的全文总字数绝对不得超过 350 字。能 250 字说清的，就绝不写到 350 字；能 150 字说清的，就绝不写到 250 字。宁可少说，不可多说。必须写完整，结尾要有句号，不能中途断掉；\n4. 【最关键】最终输出（content 字段）里必须只有上面这个结构化内容，不能包含你的分析过程、自我检查、自问自答；\n5. 【最关键】加粗效果必须和不勾思考模式时一模一样，**双星号** 一处都不能少。';
+const THINKING_PROMPT = '你是公考辅导老师。\n\n【第一步：分析】\n先在心里分析这道题：判断题型、找正确答案、逐个选项想清楚对错理由、总结关键与易错点。这一步可以在你的推理内容里尽情展开，不用受格式限制。\n\n【第二步：输出最终答案】\n分析完成后，严格按照下面的格式输出最终答案。最终输出的格式和不勾思考模式时完全一致，一个字都不能省。\n\n格式结构（顺序固定，标题必须原样保留）：\n【正确答案】普通选择题/判断项数量题只写字母，如 B、C；纯判断题写"对/错"或"全部正确/第N项错误"\n【逐项分析】\n· 每一项都必须独占一行，不能把多项挤在同一行，不能用空格代替换行；\n· 普通选择题：每个选项单独一行，格式为：正确项用字母 ✅ 一句话说明它为什么对，错误项用字母 ❌ 应为[正确内容]，而不是[选项实际写的错误内容]。错误项必须用「应为……而不是……」句式，把正确内容和错误内容对照说明，不能只写「应为xxx」这种短句，例如：\n  A ✅ 建立省级独角兽企业培育机制\n  B ✅ 健全专精特新企业赋能体系\n  C ❌ 应为向上下游延伸，而不是只向下游延伸，选项漏了「上」字\n  D ✅ 推动孵化载体专业化发展\n· 纯判断题：只写一句说明对错原因，不列序号、不列 A/B/C/D。判断题不列 A/B/C/D，【逐项分析】直接写对错原因；\n· 判断项数量题：先逐项判断（每项一行），最后一行总结"综上，正确的有 N 项，选 X"。\n【题型】一句话说明这是哪种题型\n【关键】一句话点破破题点\n【易错提醒】一句话（没有就不写这一行）\n\n加粗规则（非常重要，不能省）：\n关键概念、地区名、政策名、文件名、会议名、时间节点、易错词，必须用 **双星号** 包住，例如 **压舱石**、**东北**、**绿色低碳高质量发展先行区**。每道题加粗 3-8 处，不要整句加粗。\n\n硬性要求：\n1. 不写客套话，不重复题干，不写"这道题考查的是"之类的开场白；\n2. 逐项分析必须覆盖每一项，不能漏项、不能合并；\n3. 【字数铁律】最终输出的全文总字数绝对不得超过 300 字。能 200 字说清的，就绝不写到 300 字；能 150 字说清的，就绝不写到 200 字。宁可少说，不可多说。必须写完整，结尾要有句号，不能中途断掉；\n4. 【最关键】最终输出（content 字段）里必须只有上面这个结构化内容，不能包含你的分析过程、自我检查、自问自答；\n5. 【最关键】加粗效果必须和不勾思考模式时一模一样，**双星号** 一处都不能少。';
 
 const FREE_MODEL_PROMPT = '你是公考解析工具。严格按以下规则输出，违规即错误。\n\n先判断题型，分三种：\n· 纯判断题（题干是陈述句，括号填"对/错"，无 A/B/C/D 选项）：【正确答案】只写"对"或"错"\n【逐项分析】写一句说明为什么对/为什么错，不列 A/B/C/D\n· 题干有①②③或(1)(2)(3)序号 → 逐项分析这些序号\n· 否则（有 A/B/C/D 选项）→ 逐项分析 A/B/C/D\n\n输出格式（必须一字不差，只输出结构）：\n【正确答案】普通选择题只写字母，如 B；纯判断题只写"对"或"错"\n【逐项分析】\n· 普通选择题示例：\nA ✅ 建立省级独角兽企业培育机制\nB ❌ 应为质量托底，而不是效率托底\nC ✅ 健全专精特新企业赋能体系\nD ✅ 推动孵化载体专业化发展\n· 纯判断题：判断题不列 A/B/C/D，【逐项分析】直接写对错原因。\n【题型】纯判断题写判断题，否则写选择题等具体题型\n【关键】点破破题点的关键词\n\n铁律（违反即失败）：\n1. 全文≤300字，每项≤30字；\n2. ❌项必须写「应为xxx，而不是yyy」，把正确内容和错误内容对照说明，例如「应为绿色低碳高质量发展先行区，而不是向上下游延伸」。不能只写「应为xxx」这种短句；\n3. 关键概念、政策名、地区名、时间词用 **双星号** 包住，如 **压舱石**、**东北**、**十四五**，每题加粗3-6处，不整句加粗；\n4. 禁止开场白、禁止重复题干、禁止总结；\n5. 只输出上述结构，多余的字一个字都不能有。';
 
+// 题型策略：真正改变分析思路；统一的是表达框架，不是解题逻辑。
+const AI_SIMPLIFY_OUTPUT_FORMAT = '【统一输出框架】顺序固定，标题原样保留：【正确答案】→【逐项分析】→【题型】→【关键】→【易错提醒】（无则不写这一行）。有A/B/C/D必须逐项各占一行，格式“字母 ✅/❌ 一句话依据”；含①②③④的先逐项各一行再总结“综上，正确的有N项，选X”；纯判断只写一句对错原因。每个完整句子结束后立即换行，禁多项挤一行、禁大段连续文字。不写客套话，不重复题干。关键概念、政策名、地区名、时间词用**包住3-8处，不整句加粗。全文严格≤300字，简单题更短，禁凑字、无关扩展、重复原解析、空泛套话；不得因限字删掉决定答案的关键条件、公式或推理。';
+const AI_TYPE_STRATEGIES = {
+  politics: '【本题策略-政治理论】沿用成熟逻辑：正确项“A ✅ 为什么对”；错误项必须“A ❌ 应为[正确内容]，而不是[选项错误内容]”对照纠错，说清真正错在哪，不只写错误。',
+  changshi: '【本题策略-常识判断】先判知识领域，再摆相关事实/原理/规律，再判选项是否符合，错项具体错在哪。只有确实适合才用“应为…而不是…”，不强制套政治理论语言。重点：正确答案→核心知识→关键选项辨析。',
+  verbal: '【本题策略-言语理解】走语境逻辑：核心句意→关键词→上下文/逻辑关系→作者态度/文段主旨→选项与原文对应。错项指出扩大缩小、偷换关系、无中生有等，不用理论纠错句式。重点：核心句意→逻辑关系→正确依据→主要干扰项。',
+  math: '【本题策略-数量关系】走题目条件→数量关系→建关系/公式→计算→快速方法。按题选用方程/比例/特值/代入排除/整除/极值/规律/速算。讲清为什么这样算、怎样更快，点出增长量/率等易混点。重点：关键条件→数量关系→核心公式/方法→必要计算。',
+  logic: '【本题策略-判断推理】优先用当前三级细分：定义判断拆定义要件逐项匹配；类比推理看词项间关系；逻辑判断看条件/推出/矛盾；图形看数量/位置/样式/属性规律。重点：题型规律→核心推理→关键选项辨析。',
+  data: '【本题策略-资料分析】走数据定位→指标识别→公式→代入计算→估算/速算。公式写清再代数，如增长率=(现期量-基期量)/基期量；区分增长量/率、比重/倍数。重点：数据定位→指标→公式→核心计算→结果。',
+  generic: '【本题策略-通用客观题】逐项判定对错并给一句话依据，错项说清错在哪，不套政治理论句式。',
+  unclassified: '【本题策略-未分类】本题三级细分为未分类。请在本次单次回答内部先自行判断它最接近政治理论/常识判断/言语理解/数量关系/判断推理/资料分析中的哪一种，再采用该类策略作答。不增加请求，不把内部判断作为主要输出，未分类≠政治理论。'
+};
 // 按服务商分档 max_tokens：抑制免费模型超字数
 // 300 中文字 ≈ 400-600 token；免费模型给较紧上限
 const MAX_TOKENS_BY_PROVIDER = {
@@ -13639,6 +13680,66 @@ const MAX_TOKENS_BY_PROVIDER = {
 
 // 免费/弱服从模型白名单：这些用极简提示词
 const FREE_PROVIDERS = ['zhipu', 'openrouter', 'qwen', 'siliconflow'];
+function clipText(v, n){ v = String(v == null ? '' : v); return v.length > n ? v.substring(0, n) : v; }
+function optionLineText(opt, idx){
+  var value = opt;
+  if(opt && typeof opt === 'object'){ value = opt.text || opt.content || opt.value || opt.label || opt.name || ''; }
+  return String.fromCharCode(65 + idx) + '. ' + String(value == null ? '' : value);
+}
+function collectMaterialText(item){
+  var parts = [];
+  [item.material, item._materials].forEach(function(source){
+    if(!source) return;
+    var arr = Array.isArray(source) ? source : [source];
+    arr.forEach(function(m){
+      var v = m;
+      if(m && typeof m === 'object'){ v = m.content || m.text || m.value || ''; }
+      if(v != null && v !== '') parts.push(String(v));
+    });
+  });
+  return parts.join('\n');
+}
+// 完整题目上下文：题干/选项/正确答案/原解析/材料；只设高位上限防超长，不再 500 字截断题干。
+function buildSimplifyUserContent(item){
+  var typeInfo = getSimplifyTypeInfo(item);
+  var opts = [];
+  try{ opts = getOptions(item) || []; }catch(e){ opts = []; }
+  var correct = '';
+  try{
+    var c = getCorrectLetter(item);
+    correct = Array.isArray(c) ? c.join(',') : String(c == null ? '' : c);
+  }catch(e){ correct = ''; }
+  var lines = [];
+  lines.push('【当前题型】' + typeInfo.module + ' / ' + typeInfo.subType);
+  lines.push('【题干】\n' + clipText(item.content || '', 8000));
+  if(opts.length){ lines.push('【选项】\n' + opts.map(function(o, i){ return optionLineText(o, i); }).join('\n')); }
+  else { lines.push('【选项】无（纯判断题）'); }
+  lines.push('【正确答案】' + (correct || '未知'));
+  lines.push('【原解析】\n' + clipText(item.solution || '', 8000));
+  var mat = collectMaterialText(item);
+  if(mat){ lines.push('【材料】\n' + clipText(mat, 8000)); }
+  lines.push('请综合以上生成300字以内的简化解析。');
+  return lines.join('\n\n');
+}
+// 新路由：CORE + TYPE_STRATEGY + OUTPUT_FORMAT；政治理论继续走原成熟 Prompt 全文。
+function buildSimplifySystemPrompt(item, useThinking, useFreePrompt){
+  var typeInfo = getSimplifyTypeInfo(item);
+  var key = resolveSimplifyStrategyKey(typeInfo.module, typeInfo.subType);
+  var strategy = AI_TYPE_STRATEGIES[key] || AI_TYPE_STRATEGIES.generic;
+  var typeLine = '当前题目题型：' + typeInfo.module + ' / ' + typeInfo.subType + '。';
+  if(key === 'politics'){
+    var base = useThinking ? THINKING_PROMPT : (useFreePrompt ? FREE_MODEL_PROMPT : NORMAL_PROMPT);
+    if(useThinking && useFreePrompt) base = FREE_MODEL_PROMPT + '\n（先在心里分析，只输出上述格式）';
+    return AI_SIMPLIFY_CORE + '\n' + typeLine + '\n' + strategy + '\n' + base;
+  }
+  if(useFreePrompt){
+    return AI_SIMPLIFY_CORE + '\n' + typeLine + '\n' + strategy + '\n' + AI_SIMPLIFY_OUTPUT_FORMAT + '\n（先在心里分析，只输出上述格式）';
+  }
+  if(useThinking){
+    return AI_SIMPLIFY_CORE + '\n' + typeLine + '\n' + strategy + '\n' + AI_SIMPLIFY_OUTPUT_FORMAT + '\n先在心里充分分析（可在推理内容展开），最终输出（content）只含上述结构化内容，不含思考过程。';
+  }
+  return AI_SIMPLIFY_CORE + '\n' + typeLine + '\n' + strategy + '\n' + AI_SIMPLIFY_OUTPUT_FORMAT;
+}
 
 async function simplifySolution(key, btn){
   const item=filteredQuestions.find(function(q){ return q._key===key; });
@@ -13659,11 +13760,9 @@ async function simplifySolution(key, btn){
 
   const useThinking = !!aiConfig.enableThinking;
 
-  // 按 provider 选提示词：DeepSeek 用完整版，免费模型用极简版
+  // 按 provider + 题型选提示词：政治理论沿用原成熟 Prompt，其他题型走 TYPE_STRATEGY。
   const useFreePrompt = FREE_PROVIDERS.indexOf(aiConfig.provider) !== -1;
-  const systemPrompt = useThinking
-    ? (useFreePrompt ? (FREE_MODEL_PROMPT + '\n（先在心里分析，只输出上述格式）') : THINKING_PROMPT)
-    : (useFreePrompt ? FREE_MODEL_PROMPT : NORMAL_PROMPT);
+  const systemPrompt = buildSimplifySystemPrompt(item, useThinking, useFreePrompt);
 
   // 按 provider 选 max_tokens
   const tokCfg = MAX_TOKENS_BY_PROVIDER[aiConfig.provider] || { normal: 1000, thinking: 1500 };
@@ -13673,7 +13772,7 @@ async function simplifySolution(key, btn){
     model: aiConfig.model || ep.model,
     messages:[
       {role:'system', content: systemPrompt},
-      {role:'user', content:'题目：'+(item.content||'').substring(0,500)+'\n\n原解析：'+(item.solution||'').substring(0,2000)}
+      {role:'user', content: buildSimplifyUserContent(item)}
     ],
     temperature:0.5, max_tokens:maxTok,
     stream:true,
@@ -13903,12 +14002,20 @@ async function sendChatMessage(key) {
       if(value != null && value !== '') aiMaterialParts.push(String(value));
     });
   });
-  var aiSystemPrompt = '你是公考辅导老师。直接、简洁、精准回答，不重复题目，不说废话。回答100字以内。' +
-    '\n题目：' + String(item.content == null ? '' : item.content).substring(0, 500) +
-    '\n选项：' + aiOptionsText +
-    '\n正确答案：' + aiCorrectAnswer +
-    '\n解析：' + String(item.solution == null ? '' : item.solution).substring(0, 2000) +
-    '\n材料：' + aiMaterialParts.join('\n').substring(0, 2000);
+  var aiLatestSimplify = '';
+  try{
+    for(var si = messages.length - 1; si >= 0; si--){
+      var sm = messages[si];
+      if(sm && sm.type === 'simplify' && sm.content){ aiLatestSimplify = String(sm.content); break; }
+    }
+  }catch(e){ aiLatestSimplify = ''; }
+  var aiSystemPrompt = '你是公考辅导老师。直接、简洁、精准回答用户当前问题，默认300字以内；用户只问某一项就重点讲该项，如需推导保留必要步骤。根据题目、选项、正确答案、原解析作答；若用户理解有误必须直接纠正，不迎合错误观点。不重复整题，不说废话，不复述简化解析代替回答。' +
+    '\n【题目】\n' + clipText(item.content == null ? '' : item.content, 8000) +
+    '\n【选项】\n' + (aiOptionsText || '无选项（纯判断题）') +
+    '\n【正确答案】' + aiCorrectAnswer +
+    '\n【原解析】\n' + clipText(item.solution == null ? '' : item.solution, 8000) +
+    '\n【材料】\n' + clipText(aiMaterialParts.join('\n'), 8000) +
+    (aiLatestSimplify ? '\n【AI简化解析（仅供参考，不能只复述它作答）】\n' + clipText(aiLatestSimplify, 2000) : '');
   const aiMessages = [
     {role: 'system', content: aiSystemPrompt.substring(0, 4000)}
   ];
