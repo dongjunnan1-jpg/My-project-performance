@@ -4076,6 +4076,33 @@ function idbDel(key){
     }catch(e){ res(false); }
   });
 }
+function idbDeleteKeys(keys){
+  if(!keys.length) return Promise.resolve(true);
+  if(!_db) return Promise.resolve(false);
+  return new Promise(function(resolve){
+    let settled=false;
+    let tx=null;
+    function finish(ok){
+      if(settled) return;
+      settled=true;
+      resolve(ok);
+    }
+    try{
+      tx=_db.transaction(IDB_STORE,'readwrite');
+      tx.oncomplete=function(){ finish(true); };
+      tx.onerror=function(){ finish(false); };
+      tx.onabort=function(){ finish(false); };
+      const store=tx.objectStore(IDB_STORE);
+      for(let i=0;i<keys.length;i++) store.delete(keys[i]);
+    }catch(e){
+      if(tx && typeof tx.abort==='function'){
+        try{ tx.abort(); }
+        catch(abortError){ console.error('作答时间戳删除事务中止失败:',abortError); }
+      }
+      finish(false);
+    }
+  });
+}
 
 function idbGetAllKeys(){
   if(!_db) return Promise.resolve([]);
@@ -5246,14 +5273,19 @@ async function getAnswerTimesForQuestions(questions){
 }
 async function removeAnswerTimesForQuestions(questions){
   const list=Array.isArray(questions)?questions:[];
+  const chunkSize=200;
   let ok=true;
-  for(let i=0;i<list.length;i++){
-    const q=list[i];
-    if(!q) continue;
-    const qid=q._qid||generateQuestionId(q);
-    if(!qid) continue;
-    const saved=await idbDel('answerTime:'+qid);
-    if(saved!==true) ok=false;
+  for(let start=0;start<list.length;start+=chunkSize){
+    const keys=[];
+    const end=Math.min(start+chunkSize,list.length);
+    for(let i=start;i<end;i++){
+      const q=list[i];
+      if(!q) continue;
+      const qid=q._qid||generateQuestionId(q);
+      if(!qid) continue;
+      keys.push('answerTime:'+qid);
+    }
+    if(keys.length && !await idbDeleteKeys(keys)) ok=false;
   }
   return ok;
 }
