@@ -79,6 +79,7 @@ function loadProduction(database, generateQuestionId) {
   const declarations = [
     extractFunction('idbDel'),
     extractFunction('idbDeleteKeys', false),
+    extractFunction('removeAnswerTimesForQuestionGroups'),
     extractFunction('removeAnswerTimesForQuestions')
   ].filter(Boolean);
   vm.createContext(context);

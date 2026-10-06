@@ -4103,6 +4103,77 @@ function idbDeleteKeys(keys){
     }
   });
 }
+function idbDeleteZoneFiles(zone, entries){
+  const list=Array.isArray(entries)?entries:[];
+  if(!list.length) return Promise.resolve(true);
+  if(list.length>66 || !_db) return Promise.resolve(false);
+  const ids=Object.create(null);
+  for(let i=0;i<list.length;i++){
+    const entry=list[i];
+    if(!entry || entry.id===undefined || entry.id===null) return Promise.resolve(false);
+    ids[String(entry.id)]=true;
+  }
+  return new Promise(function(resolve){
+    let settled=false;
+    let tx=null;
+    let failed=false;
+    let nextZoneIndex=null;
+    function finish(ok){
+      if(settled) return;
+      settled=true;
+      resolve(ok);
+    }
+    try{
+      tx=_db.transaction([IDB_STORE,IDB_META_STORE],'readwrite');
+      tx.onerror=function(){ failed=true; };
+      tx.onabort=function(){ finish(false); };
+      tx.oncomplete=function(){
+        if(failed || !nextZoneIndex){ finish(false); return; }
+        index[zone]=nextZoneIndex;
+        finish(true);
+      };
+      const kv=tx.objectStore(IDB_STORE);
+      const meta=tx.objectStore(IDB_META_STORE);
+      for(let i=0;i<list.length;i++){
+        const fileId=String(list[i].id);
+        kv.delete('file:'+zone+':'+fileId);
+        kv.delete(ansStateKey(zone,fileId));
+        meta.delete(metaKey(zone,fileId));
+      }
+      const idxRequest=kv.get('idx');
+      idxRequest.onerror=function(){ failed=true; };
+      idxRequest.onsuccess=function(){
+        try{
+          const saved=idxRequest.result;
+          const current=saved && typeof saved==='object' && !Array.isArray(saved) ? saved : index;
+          const currentZone=Array.isArray(current[zone]) ? current[zone] : (index[zone]||[]);
+          const next=Object.assign({},current);
+          nextZoneIndex=currentZone.filter(function(entry){ return !ids[String(entry.id)]; });
+          next[zone]=nextZoneIndex;
+          kv.put(next,'idx');
+        }catch(e){
+          failed=true;
+          try{ tx.abort(); }
+          catch(abortError){
+            console.error('分区文件删除事务中止失败:',abortError);
+            finish(false);
+          }
+        }
+      };
+    }catch(e){
+      failed=true;
+      if(tx && typeof tx.abort==='function'){
+        try{ tx.abort(); }
+        catch(abortError){
+          console.error('分区文件删除事务中止失败:',abortError);
+          finish(false);
+        }
+      }else{
+        finish(false);
+      }
+    }
+  });
+}
 
 function idbGetAllKeys(){
   if(!_db) return Promise.resolve([]);
@@ -5272,21 +5343,28 @@ async function getAnswerTimesForQuestions(questions){
   return result;
 }
 async function removeAnswerTimesForQuestions(questions){
-  const list=Array.isArray(questions)?questions:[];
+  return removeAnswerTimesForQuestionGroups([Array.isArray(questions)?questions:[]]);
+}
+async function removeAnswerTimesForQuestionGroups(groups){
+  const lists=Array.isArray(groups)?groups:[];
   const chunkSize=200;
   let ok=true;
-  for(let start=0;start<list.length;start+=chunkSize){
-    const keys=[];
-    const end=Math.min(start+chunkSize,list.length);
-    for(let i=start;i<end;i++){
+  let keys=[];
+  for(let li=0;li<lists.length;li++){
+    const list=Array.isArray(lists[li])?lists[li]:[];
+    for(let i=0;i<list.length;i++){
       const q=list[i];
       if(!q) continue;
       const qid=q._qid||generateQuestionId(q);
       if(!qid) continue;
       keys.push('answerTime:'+qid);
+      if(keys.length===chunkSize){
+        if(!await idbDeleteKeys(keys)) ok=false;
+        keys=[];
+      }
     }
-    if(keys.length && !await idbDeleteKeys(keys)) ok=false;
   }
+  if(keys.length && !await idbDeleteKeys(keys)) ok=false;
   return ok;
 }
 
@@ -7001,17 +7079,23 @@ function viewRecordDetach(rec){
 //   filteredQuestions / 分区快照里的元素**就是**这些对象本身，卸载它们即等于
 //   「release 之后没有任何业务强引用路径还能走到已释放文件的正文」。
 function detachViewRecordsForFile(zone, fileId){
-  const fid = String(fileId);
-  let n = 0;
-  const strip = function(arr){
+  return detachViewRecordsForFiles(zone, [fileId]);
+}
+function detachViewRecordsForFiles(zone, fileIds){
+  const ids=Object.create(null);
+  const list=Array.isArray(fileIds)?fileIds:[];
+  for(let i=0;i<list.length;i++) ids[String(list[i])]=true;
+  let n=0;
+  const strip=function(arr){
     if(!Array.isArray(arr)) return;
     for(let i=0;i<arr.length;i++){
-      const r = arr[i];
-      if(r && String(r._fileId) === fid && viewRecordDetach(r)) n++;
+      const r=arr[i];
+      if(r && r._zone===zone && ids[String(r._fileId)] && viewRecordDetach(r)) n++;
     }
   };
-  strip(_prepFiles[zone] && _prepFiles[zone][fid]);
-  strip(_snap.arr);
+  const cache=_prepFiles[zone]||{};
+  Object.keys(ids).forEach(function(fid){ strip(cache[fid]); });
+  if(_snap.zone===zone) strip(_snap.arr);
   strip(filteredQuestions);
   return n;
 }
@@ -7900,7 +7984,6 @@ function updateFilterOptions() {
     window._sourceCount = sourceCount;
 
     renderSourceSuggestions();
-    refreshRatioRangeOptions();
 }
 
 // 刷新 #sortFilter 的区间选项文字（追加各区间题数），并保持/修复当前选中值
@@ -10619,13 +10702,70 @@ function removeFile(id){
     renderAll();
   });
 }
+async function clearZoneFilesInBatches(zone, entries, viewsByFile){
+  const files=Array.isArray(entries)?entries:[];
+  const views=viewsByFile||{};
+  const batchSize=66;
+  const deleted=[];
+  for(let i=0;i<files.length;i++){
+    const entry=files[i];
+    const fileId=entry && String(entry.id);
+    if(!fileId || !Array.isArray(views[fileId])){
+      return {ok:false,deleted:deleted,reason:'view-incomplete'};
+    }
+  }
+  for(let start=0;start<files.length;start+=batchSize){
+    const batch=files.slice(start,start+batchSize);
+    const questionGroups=batch.map(function(entry){ return views[String(entry.id)]; });
+    if(!await removeAnswerTimesForQuestionGroups(questionGroups)){
+      return {ok:false,deleted:deleted,reason:'answer-time'};
+    }
+    if(!await idbDeleteZoneFiles(zone,batch)){
+      return {ok:false,deleted:deleted,reason:'storage'};
+    }
+    const ids=batch.map(function(entry){ return String(entry.id); });
+    detachViewRecordsForFiles(zone,ids);
+    for(let i=0;i<ids.length;i++){
+      const fileId=ids[i];
+      if(db[zone]) delete db[zone][fileId];
+      if(_ansStateSrc[zone]) delete _ansStateSrc[zone][fileId];
+      if(_prepFiles[zone]) delete _prepFiles[zone][fileId];
+    }
+    if(_snap.zone===zone) dropSnapshot();
+    _gfbMemo.sig=null; _gfbMemo.arr=null;
+    _moduleStatsMemo.sig=null; _moduleStatsMemo.stats=null;
+    deleted.push.apply(deleted,ids);
+  }
+  return {ok:true,deleted:deleted,reason:''};
+}
 function clearAllFiles(){
-  showConfirm('清空本分区「'+zoneName(activeZone)+'」的全部文件？此操作不可撤销。', async ()=>{
-    if(!await removeAnswerTimesForQuestions(getZoneQuestions(activeZone,'__all__'))){ alert('作答时间戳清理失败，未清空分区'); return; }
-    index[activeZone].forEach(function(m){ try{ idbDel('file:'+activeZone+':'+m.id); }catch(e){} deleteQuestionState(activeZone, m.id); deleteMetaIndex(activeZone, m.id); });
-    index[activeZone]=[]; db[activeZone]={}; activeFile='__all__';
-    bumpDbEpoch();
-    saveIndex(); searchBox.value=''; filterState.module='all'; filterState.subType='all'; filterState.leafType='all'; renderAll();
+  const zone=activeZone;
+  showConfirm('清空本分区「'+zoneName(zone)+'」的全部文件？此操作不可撤销。', async ()=>{
+    const entries=(index[zone]||[]).slice();
+    await ensureZoneView(zone);
+    const views=_prepFiles[zone]||{};
+    if(entries.some(function(entry){ return !entry || !Array.isArray(views[String(entry.id)]); })){
+      alert('分区视图未完整就绪，未清理文件。请稍后重试。');
+      return;
+    }
+    const result=await clearZoneFilesInBatches(zone,entries,views);
+    if(result.deleted.length) bumpDbEpoch();
+    if(!result.ok){
+      if(result.deleted.length && activeZone===zone && activeFile!=='__all__' && !db[zone][activeFile]) activeFile='__all__';
+      if(result.deleted.length) renderAll();
+      const remaining=(index[zone]||[]).length;
+      const detail=result.reason==='answer-time' ? '作答时间戳清理失败（可能已部分删除），当前文件批次未删除。' :
+        result.reason==='view-incomplete' ? '分区视图不完整，未删除当前文件批次。' :
+        '文件/进度/索引事务失败；当前文件批次的作答时间戳已清理，但文件未删除。';
+      alert('分区清理未完成：'+detail+'已完成 '+result.deleted.length+' 个文件，剩余 '+remaining+' 个文件。可重试清理。');
+      return;
+    }
+    if(activeZone===zone){
+      activeFile='__all__';
+      searchBox.value='';
+      filterState.module='all'; filterState.subType='all'; filterState.leafType='all';
+    }
+    renderAll();
   });
 }
 function resetProgress(){
@@ -10695,7 +10835,6 @@ function switchZone(z){
     currentPage=Math.max(1, Number(restoredStudyPosition.page)||1);
   }
   saveView(); renderAll();
-  setTimeout(function(){ window.updateSubTypeFilter(); }, 100);
   // C2-B：cleanInvalidWrongSilent 的白名单依赖「本分区题目 Key 全集」（zoneDataComplete 已加守卫）。
   //   视图未就绪时它会直接跳过清理 ⇒ 这里等视图就绪后再执行，保持与旧实现相同的行为时序语义。
   ensureZoneView(activeZone).then(function(){
