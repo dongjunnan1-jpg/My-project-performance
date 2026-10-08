@@ -13365,7 +13365,7 @@ const AI_ENDPOINTS={
   },
   zhipu:{
     url:'https://open.bigmodel.cn/api/paas/v4/chat/completions',
-    model:'glm-4.7-flash',
+    model:'glm-4.1',
     authType:'bearer'
   },
   qwen:{
@@ -13408,8 +13408,47 @@ function aiAuthHeaders(){
 }
 // 中转接口地址（部署后替换为真实地址；留空则直接走直连）
 const AI_PROXY_URL = 'https://你的中转接口地址';
-// 新闻抓取 Worker（用于把新闻网页 URL 抓成纯文本，喂给 AI 简化）
-const NEWS_FETCH_WORKER = 'https://newsfetch.dongjunnan1.workers.dev';
+// 新闻抓取中转（把新闻网页 URL 抓成 HTML 喂给 AI 简化）。
+// 为什么必须有中转：新闻源站不返回 Access-Control-Allow-Origin，
+// 浏览器会在收到响应前就拦掉跨域请求，所以必须由服务器代取并补 CORS 头。
+//
+// 两条通道并存，按顺序尝试，失败自动换下一条：
+//   1) 腾讯云 CloudBase 云函数 —— 国内直连，不用代理（部署后填入真实地址）
+//   2) Cloudflare Worker      —— 开代理时可用 / 腾讯云故障时兜底
+// 所以「开代理走 Worker、不开代理走腾讯云」是自动的，不用手动切换。
+// 末尾不要加斜杠：调用侧会拼'/?url='
+// ⚠ 占位符地址（<envId>）会被自动跳过；某通道彻底失效就直接删掉该行。
+const NEWS_FETCH_WORKERS = [
+  'https://helium-d3gmru2j0ff7b83c3-1487211746.ap-shanghai.app.tcloudbase.com/newsfetch',
+  'https://newsfetch.dongjunnan1.workers.dev',
+];
+// 单条通道超时上限（毫秒），腾讯云冷启动可能较慢，给宽一点
+var NEWS_FETCH_TIMEOUT = 20000;
+// 依次尝试上面每个中转，第一个失败自动换下一个；全失败才报错
+async function newsFetchHtml(url){
+  var last = null;
+  for (var i=0; i<NEWS_FETCH_WORKERS.length; i++){
+    var base = NEWS_FETCH_WORKERS[i];
+    if(!base || base.indexOf('<envId>') >= 0){ continue; }   // 占位地址直接跳过，不空等超时
+    var ctl = null, timer = null;
+    try{
+      if(typeof AbortController !== 'undefined'){
+        ctl = new AbortController();
+        timer = setTimeout(function(){ try{ ctl.abort(); }catch(_){} }, NEWS_FETCH_TIMEOUT);
+      }
+      var resp = await fetch(base + '/?url=' + encodeURIComponent(url), ctl ? {signal: ctl.signal} : undefined);
+      if(!resp.ok){ throw new Error('HTTP ' + resp.status); }
+      var html = await resp.text();
+      if(!html || html.length < 100){ throw new Error('返回内容为空或过短'); }
+      return html;
+    }catch(e){
+      last = e;
+    }finally{
+      if(timer) clearTimeout(timer);
+    }
+  }
+  throw last || new Error('无可用中转');
+}
 // AI 请求带自动重试：App WebView 网络不稳时，失败后隔 1 秒重试，最多 3 次
 async function axiosWithRetry(config, retries){
   retries = (typeof retries === 'number') ? retries : 3;
@@ -17966,10 +18005,7 @@ document.addEventListener('pageshow', function() {
     newsState.url = url;
     setStatus('⏳ 抓取中…');
     try{
-      var resp = await fetch(NEWS_FETCH_WORKER + '/?url=' + encodeURIComponent(url));
-      if(!resp.ok){ throw new Error('HTTP ' + resp.status); }
-      var html = await resp.text();
-      if(!html || html.length < 100){ throw new Error('返回内容为空或过短'); }
+      var html = await newsFetchHtml(url);
       var doc = new DOMParser().parseFromString(html, 'text/html');
       doc.querySelectorAll('script,style,nav,footer,header,aside,iframe,noscript,.adsense-container').forEach(function(el){ el.remove(); });
       // 优先命中新闻正文容器（实测 govopendata 正文在 .article-content）
@@ -17995,10 +18031,8 @@ document.addEventListener('pageshow', function() {
         var yUrl = newsXinwenUrl(newsYesterday());
         setStatus('当天稿件未发布，自动改用昨天…');
         try{
-          var resp2 = await fetch(NEWS_FETCH_WORKER + '/?url=' + encodeURIComponent(yUrl));
-          if(resp2.ok){
-            var html2 = await resp2.text();
-            if(html2 && html2.length >= 100){
+          var html2 = await newsFetchHtml(yUrl);
+          if(html2 && html2.length >= 100){
               var doc2 = new DOMParser().parseFromString(html2, 'text/html');
               doc2.querySelectorAll('script,style,nav,footer,header,aside,iframe,noscript,.adsense-container').forEach(function(el){ el.remove(); });
               var main2 = doc2.querySelector('.article-content') || doc2.querySelector('.content-body') || doc2.querySelector('[class*="article-content"]') || doc2.querySelector('main') || doc2.querySelector('[class*="content"]') || doc2.body;
@@ -18012,7 +18046,6 @@ document.addEventListener('pageshow', function() {
                 setStatus('✅ 已抓取 ' + text2.length + ' 字（昨天）');
                 return;
               }
-            }
           }
         }catch(e2){ /* 昨天也失败，继续走下面的报错 */ }
       }
@@ -20983,9 +21016,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     for (var i = 0; i < list.length; i++) {
       var url = list[i];
       try {
-        var resp = await fetch(NEWS_FETCH_WORKER + '/?url=' + encodeURIComponent(url));
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        var html = await resp.text();
+        var html = await newsFetchHtml(url);
         var doc = new DOMParser().parseFromString(html, 'text/html');
         var root = null;
         var candidates = ['.article-content', '.content-body', '[class*="article-content"]', 'main', '[class*="content"]', 'body'];
