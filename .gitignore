@@ -12,3 +12,7 @@ index.html.broken-*
 *.bak
 *.diff
 index.html.broken-20260926
+
+# 编辑器 / AI 工具的本地配置（逐机器不同，不应进仓库）
+.vscode/
+.workbuddy/
