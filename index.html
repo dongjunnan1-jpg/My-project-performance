@@ -13375,7 +13375,7 @@ const AI_ENDPOINTS={
   },
   siliconflow:{
     url:'https://api.siliconflow.cn/v1/chat/completions',
-    model:'THUDM/GLM-4-9B-0414',
+    model:'Qwen/Qwen2.5-72B-Instruct',
     authType:'bearer'
   },
   openrouter:{
@@ -13872,8 +13872,7 @@ const MAX_TOKENS_BY_PROVIDER = {
   gemini:      { normal: 1500, thinking: 3000 }
 };
 
-// 免费/弱服从模型白名单：这些用极简提示词
-const FREE_PROVIDERS = ['zhipu', 'openrouter', 'qwen', 'siliconflow'];
+const FREE_PROVIDERS = [];   // 已废弃：所有模型统一走 DeepSeek 那套完整提示词
 function clipText(v, n){ v = String(v == null ? '' : v); return v.length > n ? v.substring(0, n) : v; }
 function optionLineText(opt, idx){
   var value = opt;
@@ -13916,18 +13915,14 @@ function buildSimplifyUserContent(item){
   return lines.join('\n\n');
 }
 // 新路由：CORE + TYPE_STRATEGY + OUTPUT_FORMAT；政治理论继续走原成熟 Prompt 全文。
-function buildSimplifySystemPrompt(item, useThinking, useFreePrompt){
+function buildSimplifySystemPrompt(item, useThinking){
   var typeInfo = getSimplifyTypeInfo(item);
   var key = resolveSimplifyStrategyKey(typeInfo.module, typeInfo.subType);
   var strategy = AI_TYPE_STRATEGIES[key] || AI_TYPE_STRATEGIES.generic;
   var typeLine = '当前题目题型：' + typeInfo.module + ' / ' + typeInfo.subType + '。';
   if(key === 'politics'){
-    var base = useThinking ? THINKING_PROMPT : (useFreePrompt ? FREE_MODEL_PROMPT : NORMAL_PROMPT);
-    if(useThinking && useFreePrompt) base = FREE_MODEL_PROMPT + '\n（先在心里分析，只输出上述格式）';
+    var base = useThinking ? THINKING_PROMPT : NORMAL_PROMPT;
     return AI_SIMPLIFY_CORE + '\n' + typeLine + '\n' + strategy + '\n' + base;
-  }
-  if(useFreePrompt){
-    return AI_SIMPLIFY_CORE + '\n' + typeLine + '\n' + strategy + '\n' + AI_SIMPLIFY_OUTPUT_FORMAT + '\n（先在心里分析，只输出上述格式）';
   }
   if(useThinking){
     return AI_SIMPLIFY_CORE + '\n' + typeLine + '\n' + strategy + '\n' + AI_SIMPLIFY_OUTPUT_FORMAT + '\n先在心里充分分析（可在推理内容展开），最终输出（content）只含上述结构化内容，不含思考过程。';
@@ -13954,9 +13949,8 @@ async function simplifySolution(key, btn){
 
   const useThinking = !!aiConfig.enableThinking;
 
-  // 按 provider + 题型选提示词：政治理论沿用原成熟 Prompt，其他题型走 TYPE_STRATEGY。
-  const useFreePrompt = FREE_PROVIDERS.indexOf(aiConfig.provider) !== -1;
-  const systemPrompt = buildSimplifySystemPrompt(item, useThinking, useFreePrompt);
+  // 所有 provider 统一走 DeepSeek 那套完整提示词，不再有极简分流。
+  const systemPrompt = buildSimplifySystemPrompt(item, useThinking);
 
   // 按 provider 选 max_tokens
   const tokCfg = MAX_TOKENS_BY_PROVIDER[aiConfig.provider] || { normal: 1000, thinking: 1500 };
