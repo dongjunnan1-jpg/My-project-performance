@@ -1220,7 +1220,8 @@ body.skin-dark .chat-history-export-btn { color:var(--on-main) !important; borde
 }
 .q-ai-loading { color:#7c3aed; font-style:italic; }
 .q-ai-error { color:#dc2626; }
-.q-ai-result .q-ai-highlight {
+.q-ai-result .q-ai-highlight,
+.q-chat-msg .ai-keyword {
   color: var(--deep);
   background: rgba(124,58,237,0.15);
   background: color-mix(in srgb, var(--main) 15%, transparent);
@@ -1241,7 +1242,8 @@ body.skin-dark .q-content, body.skin-dark .q-title, body.skin-dark .q-solution, 
 body.skin-dark .q-solution,
 body.skin-dark .q-analysis,
 body.skin-dark .q-ai-result { color:#e2e8f0 !important; background:#1e293b !important; }
-body.skin-dark .q-ai-result .q-ai-highlight { color:#f8fafc !important; background:rgba(167,139,250,0.22) !important; border-bottom-color:#c4b5fd !important; }
+body.skin-dark .q-ai-result .q-ai-highlight,
+body.skin-dark .q-chat-msg .ai-keyword { color:#f8fafc !important; background:rgba(167,139,250,0.22) !important; border-bottom-color:#c4b5fd !important; }
 body.skin-dark .option.selected-correct { color:#4CAF50 !important; border:2px solid #4CAF50 !important; background:rgba(76,175,80,0.2) !important; }
 body.skin-dark .option.selected-wrong { color:#f44336 !important; border:2px solid #f44336 !important; background:rgba(244,67,54,0.2) !important; }
 body.skin-dark .header-pp .pp-card { background:var(--surface) !important; border-color:var(--border) !important; color:var(--text) !important; }
@@ -14112,7 +14114,10 @@ function renderChatBox(key, messages) {
     messages.forEach(function(msg) {
       const cls = msg.role === 'user' ? 'q-chat-user' : 'q-chat-ai';
       const label = msg.role === 'user' ? '🙋' : '🤖';
-      html += '<div class="q-chat-msg ' + cls + '">' + label + ' ' + msg.content.replace(/</g,'&lt;').replace(/\n/g,'<br>') + '</div>';
+      var _chatHtml = escapeHtml(msg.content)
+        .replace(/\*\*([^*]+)\*\*/g, '<strong class="ai-keyword">$1</strong>')
+        .replace(/\n/g,'<br>');
+      html += '<div class="q-chat-msg ' + cls + '">' + label + ' ' + _chatHtml + '</div>';
     });
   }
   html += '</div>';
