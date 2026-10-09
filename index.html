@@ -13413,14 +13413,24 @@ const AI_PROXY_URL = 'https://你的中转接口地址';
 // 浏览器会在收到响应前就拦掉跨域请求，所以必须由服务器代取并补 CORS 头。
 //
 // 两条通道并存，按顺序尝试，失败自动换下一条：
-//   1) 腾讯云 CloudBase 云函数 —— 国内直连，不用代理（部署后填入真实地址）
-//   2) Cloudflare Worker      —— 开代理时可用 / 腾讯云故障时兜底
-// 所以「开代理走 Worker、不开代理走腾讯云」是自动的，不用手动切换。
+//   1) Cloudflare Worker      —— 当前唯一在浏览器里可用的通道（CORS 头干净）
+//   2) 腾讯云 CloudBase 云函数 —— 备用，见下方「已知不可用」说明
 // 末尾不要加斜杠：调用侧会拼'/?url='
 // ⚠ 占位符地址（<envId>）会被自动跳过；某通道彻底失效就直接删掉该行。
+//
+// ⚠【已知不可用 · 2026-10-09 实测】腾讯云那条：
+//   CloudBase HTTP 网关会把上游返回的 Access-Control-Allow-Origin
+//   与它自己的值用逗号拼接，且吃掉https 的一个斜杠，实测返回
+//     access-control-allow-origin: https:/turbo-1-...webapps.tcloudbase.com,*
+//   这是非法 CORS 头，浏览器判定跨域被拒，fetch 在到达函数之前就被拦截。
+//   已排除的可能：① 安全域名白名单已含*.webapps.tcloudbase.com；
+//   ② 云函数改成回显 Origin 并重新部署后，网关仍会再拼一次；
+//   ③ 函数无独立访问地址（AccessInfo.Host 为空），只能走网关。
+//   → 保留该行仅作备用；腾讯云平台修复网关后，把两行顺序对调即可。
+//     不要在修好前把它挪到第一位，否则新闻抓取在浏览器里必定失败。
 const NEWS_FETCH_WORKERS = [
-  'https://helium-d3gmru2j0ff7b83c3-1487211746.ap-shanghai.app.tcloudbase.com/newsfetch',
   'https://newsfetch.dongjunnan1.workers.dev',
+  'https://helium-d3gmru2j0ff7b83c3-1487211746.ap-shanghai.app.tcloudbase.com/newsfetch',
 ];
 // 单条通道超时上限（毫秒），腾讯云冷启动可能较慢，给宽一点
 var NEWS_FETCH_TIMEOUT = 20000;
