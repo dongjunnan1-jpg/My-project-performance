@@ -8700,10 +8700,46 @@ function normalizeImgUrl(src){
 }
 // 字符串级图片协议修复：把 HTML 片段里的 src="file://host" 和 src="//host" 改成 src="https://host"
 // 用于渲染前对 content/solution/material 的批量修复（与 normalizeImgUrl 互补）
+// ---------------------------------------------------------------------------
+// [FIX 20261016] HTML 标签平衡防御：
+//   题库 JSON 的 content/solution/material 属于用户数据，可能带不闭合标签
+//   （典型：评论区注入脚本重注后每题残留 2 个未闭合 <div>）。
+//   innerHTML 解析时，未闭合容器会把后续同级内容全部吞进自己内部——
+//   曾导致第 1 题的 .q-solution（display:none）吞掉后面 19 张题卡，
+//   整页视觉上「只显示一道题、没有解析、AI/心得按钮消失」。
+//   处理：① 已知残留模式（评论区 A+B 空壳开标签）直接删除；
+//        ② 快速计数检测；只要仍不平衡，就用解析器往返一次补齐未闭合标签
+//           （浏览器解析器会在末尾自动闭合，序列化回来即为平衡 HTML）。
+//   已平衡的字符串原样返回，零额外开销、零字节变化。
+// ---------------------------------------------------------------------------
+var _HTML_VOID_TAGS={img:1,br:1,hr:1,input:1,meta:1,link:1,source:1,area:1,base:1,col:1,embed:1,param:1,track:1,wbr:1};
+var _CMT_ORPHAN_AB='<div style="margin-top:14px;padding-top:12px;border-top:1px dashed #d8dbe0"><div style="font-weight:600;color:#2f6fd0;font-size:14px;margin-bottom:4px">';
+var _CMT_LITE_C='<div style="border-top:1px solid #ccc;margin-top:10px;padding-top:8px">';
+function htmlTagUnbalanced(s){
+  var re=/<(\/)?([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>/g, m, cnt={}, k;
+  while((m=re.exec(s))){
+    var name=m[2].toLowerCase();
+    if(_HTML_VOID_TAGS[name]) continue;
+    cnt[name]=(cnt[name]||0)+(m[1]?-1:1);
+  }
+  for(k in cnt){ if(cnt[k]!==0) return true; }
+  return false;
+}
+function balanceHtmlTags(s){
+  try{
+    var q=s;
+    var orphan=_CMT_ORPHAN_AB+_CMT_LITE_C;
+    if(q.indexOf(orphan)!==-1){ q=q.split(orphan).join(_CMT_LITE_C); }   // ① 已知残留模式
+    if(!htmlTagUnbalanced(q)) return q;
+    var probe=document.createElement('div');                            // ② 通用平衡修复
+    probe.innerHTML=q;
+    return probe.innerHTML;
+  }catch(e){ return s; }
+}
 function fixProtocols(s){
   if(!s) return s;
-  return s.replace(/src=["']file:\/\/+\/?([^"']*)["']/g, 'src="https://$1"')
-          .replace(/src=["']\/\/([^"']*)["']/g, 'src="https://$1"');
+  return balanceHtmlTags(s.replace(/src=["']file:\/\/+\/?([^"']*)["']/g, 'src="https://$1"')
+          .replace(/src=["']\/\/([^"']*)["']/g, 'src="https://$1"'));
 }
 // ============================================================
 // 材料兜底：原始导出（如粉笔 CDN 直出）里题目只有整卷材料 _materials，没有单题 material。
