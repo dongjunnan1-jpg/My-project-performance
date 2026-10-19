@@ -13400,7 +13400,13 @@ const AI_ENDPOINTS={
     authType:'gemini'
   },
   zhipu:{
-    url:'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+    // 必须用 bigmodel.cn，不能用 open.bigmodel.cn：
+    // open.bigmodel.cn 的 IPv4 入口对 CORS 预检（OPTIONS）返回 200 但**不带 access-control-* 头**，
+    // 而发 POST 带 Authorization / application/json 前浏览器必须先过预检，预检失败就抛
+    // TypeError: Load failed（请求根本发不出去）。手机端是 IPv4 直连 → 必失败；
+    // 桌面走代理时恰好命中 IPv6 入口（IPv6 入口的头是完整的）→ 看起来正常。
+    // bigmodel.cn 是同一套 API、同一把 Key、同样支持 stream，预检头完整。
+    url:'https://bigmodel.cn/api/paas/v4/chat/completions',
     // 注意：glm-4.1 已不在开放平台可用列表，调用返回 400 / code=1211「模型不存在」。
     // 默认值必须是当前可用的模型代码，否则新用户一选智谱就必失败。
     model:'glm-4-flash',
