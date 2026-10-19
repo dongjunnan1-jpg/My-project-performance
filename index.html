@@ -13401,7 +13401,9 @@ const AI_ENDPOINTS={
   },
   zhipu:{
     url:'https://open.bigmodel.cn/api/paas/v4/chat/completions',
-    model:'glm-4.1',
+    // 注意：glm-4.1 已不在开放平台可用列表，调用返回 400 / code=1211「模型不存在」。
+    // 默认值必须是当前可用的模型代码，否则新用户一选智谱就必失败。
+    model:'glm-4-flash',
     authType:'bearer'
   },
   qwen:{
@@ -13565,6 +13567,18 @@ function loadAIConfig(){
   try{ const r=localStorage.getItem(AI_KEY); if(r) aiConfig=JSON.parse(r); }catch(e){}
   if(!aiConfig||typeof aiConfig!=='object') aiConfig={provider:'',apiKey:'',model:'',enableSearch:false};
   if(!aiConfig.providerConfigs||typeof aiConfig.providerConfigs!=='object'||Array.isArray(aiConfig.providerConfigs)) aiConfig.providerConfigs={};
+  // 旧配置自愈：历史默认值写的是平台已下线的模型代码（智谱 glm-4.1 → HTTP 400 / 1211 模型不存在），
+  // 留着会让用户一点「简化解析」必失败。加载时静默换回当前可用的默认模型。
+  var LEGACY_AI_MODELS = {zhipu:['glm-4.1','glm-4']};
+  Object.keys(LEGACY_AI_MODELS).forEach(function(pid){
+    var pc = aiConfig.providerConfigs[pid];
+    if(!pc || !pc.model) return;
+    if(LEGACY_AI_MODELS[pid].indexOf(String(pc.model).trim()) >= 0){
+      pc.model = (AI_ENDPOINTS[pid] && AI_ENDPOINTS[pid].model) || '';
+      console.log('[AI] 模型代码已下线，自动切换到 ' + pc.model);
+    }
+  });
+  try{ localStorage.setItem(AI_KEY, JSON.stringify(aiConfig)); }catch(e){}
   aiConfig.enableSearch = !!aiConfig.enableSearch;
   aiConfig.enableThinking = !!aiConfig.enableThinking;
   const p=document.getElementById('aiProvider');
@@ -14088,6 +14102,13 @@ async function simplifySolution(key, btn){
       if(!resp.ok){
         clearTimeout(timeoutId);
         const errText=await resp.text().catch(function(){ return ''; });
+        // 模型代码失效自愈：平台下线旧模型代码时（智谱统一返回 400 + 1211 模型不存在），
+        // 自动换回该服务商当前默认模型重试一次，不吃掉重试次数。
+        if(errText.indexOf('1211') >= 0 && body.model !== ep.model){
+          body.model = ep.model;
+          attempt--;
+          throw new Error('模型代码已失效，已自动切换到 '+ep.model);
+        }
         throw new Error('HTTP '+resp.status+' '+errText.substring(0,200));
       }
 
