@@ -6730,21 +6730,31 @@ function handleFiles(fileListArr){
             }
             questions = keptQuestions;
           }
-          // [20261020] 覆盖同名文件：旧文件的评论区在删除前已快照，这里按身份键补回（避免覆盖即丢评论）
+          // [20261020] 覆盖同名文件：旧文件的评论/做题记录/收藏/错题/心得已快照，这里按身份键补回
+          var rescuedAnswered = null;
           if(cmtRescue){
             try{
-              questions.forEach(function(q){
+              var __ans = {}, __needFav = false, __needWrong = false;
+              questions.forEach(function(q, i){
                 if(!q || q._essay) return;
                 var k = questionIdentityKey(q);
                 if(!k) return;
-                var oldQ = cmtRescue[k];
-                if(oldQ && carryOverComments(q, oldQ)) cmtKept++;
+                var oq = cmtRescue.cmt[k];
+                if(oq && carryOverComments(q, oq)) cmtKept++;
+                var nk = 'f'+id+'_q'+i;                 // 新 key
+                if(cmtRescue.ans[k] !== undefined && cmtRescue.ans[k] !== null){ __ans[nk] = cmtRescue.ans[k]; }
+                if(cmtRescue.fav[k]){ if(!favorites[zone]) favorites[zone] = {}; favorites[zone][nk] = true; __needFav = true; }
+                if(cmtRescue.wrong[k]){ if(!wrongSet[zone]) wrongSet[zone] = {}; wrongSet[zone][nk] = true; __needWrong = true; }
+                if(cmtRescue.note[k]){ try{ saveNote(nk, cmtRescue.note[k]); }catch(e){} }
               });
+              if(__needFav) saveFav();
+              if(__needWrong) saveWrong();
+              if(Object.keys(__ans).length) rescuedAnswered = __ans;
             }catch(e){}
             cmtRescue = null;
           }
           
-          const obj={ id, fileName:file.name, zone, module, uploadTime:Date.now(), size:file.size, questions:questions, answered:{} };
+          const obj={ id, fileName:file.name, zone, module, uploadTime:Date.now(), size:file.size, questions:questions, answered: rescuedAnswered || {} };
           db[zone][id]=obj;
           index[zone].push({id, fileName:file.name, zone, module, uploadTime:obj.uploadTime, size:file.size, count:questions.length});
           bumpDbEpoch();               // 题库内容变了：作废分区快照与展开缓存
@@ -6762,8 +6772,8 @@ function handleFiles(fileListArr){
         if(exist){
           const ef=exist; // 闭包快照，供确认回调使用
           showConfirm('分区「'+zoneName(zone)+'」中已存在同名文件「'+file.name+'」，是否覆盖？', ()=>{
-            // [20261020] 覆盖前先快照旧题评论区，重建后按身份键补回
-            cmtRescue = buildCommentRescue(db[zone][ef.id]);
+            // [20261020] 覆盖前先快照旧题的评论区 + 做题记录 + 收藏/错题/心得，重建后按身份键补回
+            cmtRescue = buildRescueSnapshot(db[zone][ef.id], zone);
             delete db[zone][ef.id];
             bumpDbEpoch();
             index[zone]=index[zone].filter(x=>x.id!==ef.id);
@@ -7065,20 +7075,28 @@ function carryOverComments(merged, oldQ){
     return true;
   }catch(e){ return false; }   // 保护逻辑绝不允许影响导入本身
 }
-// [20261020] 评论区保护 · 覆盖同名文件前，把旧文件里带评论的题按「身份键」做成快照
-//   覆盖会先删旧记录再重建，评论会随旧题一起消失；重建后按身份键把评论补回去
-function buildCommentRescue(f){
-  var map = {};
+// [20261020] 覆盖同名文件前的抢救快照：评论 + 做题记录 + 收藏 + 错题 + 心得
+//   覆盖会先删旧记录再重建（新文件 id 会变），而上面这五样都挂在 key = 'f'+文件id+'_q'+序号 上，
+//   所以必须按「题目身份键」快照、重建后按身份键映射到新 key（身份键不含 solution，同 id 必对得上）
+function buildRescueSnapshot(f, zone){
+  var snap = { cmt:{}, ans:{}, fav:{}, wrong:{}, note:{} };
   try{
     var qs = (f && Array.isArray(f.questions)) ? f.questions : [];
-    qs.forEach(function(o){
-      if(!o || o._essay) return;
-      if(commentSectionOf(o.solution) === '') return;
+    var notesMap = (typeof loadNotes === 'function') ? (loadNotes() || {}) : {};
+    for(var i=0;i<qs.length;i++){
+      var o = qs[i];
+      if(!o || o._essay) continue;
       var k = questionIdentityKey(o);
-      if(k) map[k] = o;
-    });
+      if(!k) continue;
+      var ok = 'f'+f.id+'_q'+i;                       // 旧 key
+      if(commentSectionOf(o.solution) !== '') snap.cmt[k] = o;
+      if(f.answered && f.answered[ok] !== undefined && f.answered[ok] !== null) snap.ans[k] = f.answered[ok];
+      if(favorites[zone] && favorites[zone][ok]) snap.fav[k] = true;
+      if(wrongSet[zone] && wrongSet[zone][ok]) snap.wrong[k] = true;
+      if(notesMap[ok]) snap.note[k] = notesMap[ok];
+    }
   }catch(e){}
-  return map;
+  return snap;
 }
 function prepareQuestion(zone, f, q, qi){
   var key = 'f'+f.id+'_q'+qi;
