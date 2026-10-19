@@ -6600,6 +6600,8 @@ function handleFiles(fileListArr){
         if(!module) module = '常识判断';
         const id=genId();
         const exist=index[zone].find(x=>x.fileName===file.name);
+        // [20261020] 覆盖同名文件时抢救评论区的快照：身份键 → 旧题（删除前生成，重建后补回）
+        let cmtRescue = null;
         // 新增/覆盖同一文件：抽成可复用的内部函数，兼容“先确认再执行”的异步确认弹窗
         function addNew(){
           // 补全category和subType
@@ -6653,7 +6655,7 @@ function handleFiles(fileListArr){
           //   · 只在同一分区内去重：模考/公考等分区仍各自独立保留
           //   · 覆盖同名文件时旧记录已先行删除，不会命中自己，覆盖后即为最新内容
           // ============================================================
-          var dedupSkipped = 0, dedupRefreshed = 0;
+          var dedupSkipped = 0, dedupRefreshed = 0, cmtKept = 0;
           if(!isEssay){
             // 1) 扫一遍本分区已有题目，建立 身份键 → [{文件id, 序号}] 索引
             var idKeyMap = {};
@@ -6690,6 +6692,8 @@ function handleFiles(fileListArr){
                 Object.keys(q).forEach(function(kk){ merged[kk] = q[kk]; });
                 Object.keys(oq).forEach(function(kk){ if(kk.charAt(0)==='_') merged[kk] = oq[kk]; });
                 merged._qid = q._qid;
+                // [20261020] 评论保护：新内容里没有评论区、旧记录有 → 把旧评论整段接回去
+                if(carryOverComments(merged, oq)) cmtKept++;
                 f.questions[h.oi] = merged;
                 touchedFiles[h.fid] = true;
                 dedupRefreshed++;
@@ -6709,6 +6713,7 @@ function handleFiles(fileListArr){
               var __dupTail = dedupRefreshed
                 ? ('\n· 其中 '+dedupRefreshed+' 条已有记录已用本次的新内容刷新（做题进度保留）')
                 : '';
+              if(cmtKept) __dupTail += '\n· 其中 '+cmtKept+' 条保留了原有评论区（本次导入的版本没有评论，已自动接回）';
               if(keptQuestions.length === 0){
                 // 注意：若本次是「覆盖同名文件」，旧记录已在进入 addNew 前从 db/index 中删除，
                 //   这里必须把 index 落盘，否则刷新页面后会出现「已删文件的幽灵记录」
@@ -6724,6 +6729,19 @@ function handleFiles(fileListArr){
               setTimeout(function(){ alert(__dupMsg); }, 600);
             }
             questions = keptQuestions;
+          }
+          // [20261020] 覆盖同名文件：旧文件的评论区在删除前已快照，这里按身份键补回（避免覆盖即丢评论）
+          if(cmtRescue){
+            try{
+              questions.forEach(function(q){
+                if(!q || q._essay) return;
+                var k = questionIdentityKey(q);
+                if(!k) return;
+                var oldQ = cmtRescue[k];
+                if(oldQ && carryOverComments(q, oldQ)) cmtKept++;
+              });
+            }catch(e){}
+            cmtRescue = null;
           }
           
           const obj={ id, fileName:file.name, zone, module, uploadTime:Date.now(), size:file.size, questions:questions, answered:{} };
@@ -6744,6 +6762,8 @@ function handleFiles(fileListArr){
         if(exist){
           const ef=exist; // 闭包快照，供确认回调使用
           showConfirm('分区「'+zoneName(zone)+'」中已存在同名文件「'+file.name+'」，是否覆盖？', ()=>{
+            // [20261020] 覆盖前先快照旧题评论区，重建后按身份键补回
+            cmtRescue = buildCommentRescue(db[zone][ef.id]);
             delete db[zone][ef.id];
             bumpDbEpoch();
             index[zone]=index[zone].filter(x=>x.id!==ef.id);
@@ -7007,6 +7027,59 @@ function viewRecordIsPrimitive(v){ return v === null || typeof v === 'string' ||
 //   _qzMulti        是否多选（原实现依赖 correctAnswer 对象，正文不在手时会误判为单选）
 // 这两个派生量让「判对错 / 判单选多选」完全脱离正文 —— 见 getCorrectLetter / isMultipleChoice
 // 顶部对 _view===1 记录的短路分支。它们都只依赖题目本身，与筛选/排序无关。
+// [20261020] 评论区保护 · 从 solution 里切出「考生讨论」那一整张卡片（卡片根 div → 末尾）
+//   卡片根 div 签名：<div style="margin-top:14px;padding-top:12px;border-top:1px dashed #d8dbe0">
+//   用 lastIndexOf 取「考生讨论」之前最后一个签名，避免把官方解析里的 div 切进来
+function commentSectionOf(s){
+  if(typeof s!=='string') return '';
+  var i = s.indexOf('考生讨论');
+  if(i < 0) return '';
+  var j = s.lastIndexOf('<div style="margin-top:14px', i);
+  if(j < 0) j = s.lastIndexOf('<div', i);
+  return j >= 0 ? s.slice(j) : '';
+}
+// [20261020] 评论区保护 · 从 solution 里数出「共 N 条」
+function cmtTotalOfSolution(s){
+  if(typeof s!=='string') return 0;
+  var i = s.indexOf('考生讨论');
+  if(i < 0) return 0;
+  var m = /共\s*(\d+)\s*条/.exec(s.slice(i, i+200));
+  return m ? Number(m[1]) : 0;
+}
+// [20261020] 评论区保护 · 把旧题的评论段/标记搬到「用新内容刷新」后的题对象上
+//   场景：库里已是带评论的题库，又导入同一批题的无评论版本（如普通总库）
+//   规则：新题自己没有评论区时，旧评论区整段接回新解析尾部；hasComment/cmtTotal 一并保留
+//   返回 true 表示确实保留了评论（供导入结果提示用）
+function carryOverComments(merged, oldQ){
+  try{
+    if(!merged || !oldQ) return false;
+    var oldCmt = commentSectionOf(oldQ.solution);
+    if(!oldCmt) return false;                                    // 旧题本来就没评论
+    if(commentSectionOf(merged.solution) !== '') return false;   // 新题自带评论 → 用新的
+    var base = (typeof merged.solution==='string') ? merged.solution : '';
+    var oldSol = (typeof oldQ.solution==='string') ? oldQ.solution : '';
+    merged.solution = base ? (base + oldCmt) : (oldSol || oldCmt);
+    merged.hasComment = true;
+    merged.cmtTotal = (typeof oldQ.cmtTotal==='number' && oldQ.cmtTotal > 0)
+      ? oldQ.cmtTotal : cmtTotalOfSolution(oldQ.solution);
+    return true;
+  }catch(e){ return false; }   // 保护逻辑绝不允许影响导入本身
+}
+// [20261020] 评论区保护 · 覆盖同名文件前，把旧文件里带评论的题按「身份键」做成快照
+//   覆盖会先删旧记录再重建，评论会随旧题一起消失；重建后按身份键把评论补回去
+function buildCommentRescue(f){
+  var map = {};
+  try{
+    var qs = (f && Array.isArray(f.questions)) ? f.questions : [];
+    qs.forEach(function(o){
+      if(!o || o._essay) return;
+      if(commentSectionOf(o.solution) === '') return;
+      var k = questionIdentityKey(o);
+      if(k) map[k] = o;
+    });
+  }catch(e){}
+  return map;
+}
 function prepareQuestion(zone, f, q, qi){
   var key = 'f'+f.id+'_q'+qi;
   var p = {};
