@@ -4192,7 +4192,8 @@ const STUDY_POSITION_KEY = 'qz_study_position';
 const NOTE_KEY = 'qz_shenlun_notes';
 
 const ZONES = [
-  { id:'gk', name:'国考/省考', icon:'🏛️' },
+  // [UI 2026-10-21g] 分区标签不再渲染 icon（用户要求去掉图标）；name 里也不再用 '/'（导出文件名非法字符）
+  { id:'gk', name:'国考与省考', icon:'🏛️' },
   { id:'mk', name:'模考', icon:'📝' },
   { id:'sy', name:'事业单位', icon:'🏢' },
   { id:'sl', name:'申论', icon:'✍️' },
@@ -7363,7 +7364,7 @@ function countZoneQuestions(zone){
 function renderZoneTabs(){
   zoneTabs.innerHTML = ZONES.map(z=>{
     const total=countZoneQuestions(z.id);
-    return `<button class="zone-tab ${z.id===activeZone?'active':''}" data-zone="${z.id}" onclick="switchZone('${z.id}')">${z.icon||'📂'} ${z.name}<span class="z-count">${total} 题</span></button>`;
+    return `<button class="zone-tab ${z.id===activeZone?'active':''}" data-zone="${z.id}" onclick="switchZone('${z.id}')">${z.name}<span class="z-count">${total} 题</span></button>`;
   }).join('');
 }
 
