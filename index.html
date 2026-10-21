@@ -14035,6 +14035,11 @@ async function axiosWithRetry(config, retries){
       return await axios(config);
     }catch(e){
       lastError = e;
+      // [AI 2026-10-21h] 4xx 是参数/鉴权问题，原样重试只会重复同一个错误
+      // （典型：max_tokens 超上限 400，重试 3 次才发现要降档，白等 6 秒 + 白烧 3 次配额）。
+      // 429 是限流必须退避重试，单独放行。
+      const st = e && e.response && e.response.status;
+      if(st && st >= 400 && st < 500 && st !== 429) break;
       if(i >= retries) break;
       const wait = 1000 * (i + 1);   // 1秒、2秒、3秒，逐次加长
       console.log('[AI] 请求失败，' + (wait/1000) + ' 秒后重试（第 ' + (i+1) + '/' + retries + ' 次）：', e.message || e);
@@ -14043,56 +14048,93 @@ async function axiosWithRetry(config, retries){
   }
   throw lastError;
 }
+// 判断一个失败是不是「max_tokens 超过平台上限」——各平台文案不同，
+// 但都是 HTTP 400/422 + 响应体里带 max_tokens / 上限 / 1210（智谱参数错误码）。
+function tokenLimitError(e){
+  if(!e || !e.response) return false;
+  const st = e.response.status;
+  if(st !== 400 && st !== 422) return false;
+  let d = e.response.data;
+  let txt = '';
+  try{ txt = typeof d === 'string' ? d : JSON.stringify(d || {}); }catch(_){ txt = ''; }
+  txt += ' ' + String(e.message || '');
+  return /max[_\s]?tokens|上限|超出|1210/i.test(txt);
+}
+function nextLowerToken(cur){
+  cur = Number(cur) || 0;
+  for(let i=0;i<MT_LADDER.length;i++){
+    if(MT_LADDER[i] < cur) return MT_LADDER[i];
+  }
+  return 0;
+}
 // 统一 AI 请求：优先走中转（不暴露 Key），失败自动降级直连
+// [AI 2026-10-21h] 非流式路径（答疑等）没有 finish_reason 自愈链路，
+// 一旦思考档额度超过平台上限（glm-4-flash 4095 / 硅基免费 4096）就直接 400。
+// 这里按 MT_LADDER 逐级下探重发，保证"给正文多留额度"不会反过来把能用的模型弄挂。
 async function requestAI(payload){
   const provider = payload.provider;
   const ep = AI_ENDPOINTS[provider];
   const proxyUrl = (typeof AI_PROXY_URL === 'string') ? AI_PROXY_URL.trim() : '';
   const proxyUsable = proxyUrl && proxyUrl.indexOf('你的中转接口地址') === -1;
-  // 1) 优先尝试中转
-  if(proxyUsable){
+  if(!ep) throw new Error('未知的 AI 服务商，请先配置');
+  if(!proxyUsable && !aiConfig.apiKey) throw new Error('中转不可用且未配置 API Key，无法直连');
+
+  const baseData = {
+    model: payload.model || ep.model,
+    messages: payload.messages,
+    temperature: payload.temperature,
+    max_tokens: payload.max_tokens,
+    enable_search: payload.enable_search,
+    search: payload.search,
+    ...(payload.extras || {})
+  };
+
+  let token = Number(baseData.max_tokens) || 0;
+  for(let step = 0; step < 6; step++){
+    baseData.max_tokens = token || undefined;
+    // 1) 优先尝试中转
+    if(proxyUsable){
+      try{
+        return await axiosWithRetry({
+          method: 'post',
+          url: proxyUrl,
+          headers: {'Content-Type': 'application/json'},
+          data: Object.assign({ provider: provider }, baseData),
+          timeout: 90000,
+          proxy: false
+        });
+      }catch(e){
+        const lower = tokenLimitError(e) ? nextLowerToken(token) : 0;
+        if(lower){
+          token = lower;
+          console.log('[AI] max_tokens 超平台上限，中转降到 ' + token + ' 重试');
+          continue;
+        }
+        console.log('[AI] 中转失败，已降级直连', e && (e.message || e));
+      }
+    }
+    // 2) 降级直连（需要 apiKey）
+    if(!aiConfig.apiKey) throw new Error('中转不可用且未配置 API Key，无法直连');
     try{
-      const res = await axiosWithRetry({
+      return await axiosWithRetry({
         method: 'post',
-        url: proxyUrl,
-        headers: {'Content-Type': 'application/json'},
-        data: {
-          provider: provider,
-          model: payload.model,
-          messages: payload.messages,
-          temperature: payload.temperature,
-          max_tokens: payload.max_tokens,
-          enable_search: payload.enable_search,
-          search: payload.search,
-          ...(payload.extras || {})
-        },
+        url: ep.url,
+        headers: aiAuthHeaders(),
+        data: baseData,
         timeout: 90000,
         proxy: false
       });
-      return res;
     }catch(e){
-      console.log('[AI] 中转失败，已降级直连', e && (e.message || e));
+      const lower = tokenLimitError(e) ? nextLowerToken(token) : 0;
+      if(lower){
+        token = lower;
+        console.log('[AI] max_tokens 超平台上限，直连降到 ' + token + ' 重试');
+        continue;
+      }
+      throw e;
     }
   }
-  // 2) 降级直连（需要 apiKey）
-  if(!ep) throw new Error('未知的 AI 服务商，请先配置');
-  if(!aiConfig.apiKey) throw new Error('中转不可用且未配置 API Key，无法直连');
-  return await axiosWithRetry({
-    method: 'post',
-    url: ep.url,
-    headers: aiAuthHeaders(),
-    data: {
-      model: payload.model || ep.model,
-      messages: payload.messages,
-      temperature: payload.temperature,
-      max_tokens: payload.max_tokens,
-      enable_search: payload.enable_search,
-      search: payload.search,
-      ...(payload.extras || {})
-    },
-    timeout: 90000,
-    proxy: false
-  });
+  throw new Error('max_tokens 已降到最低仍被平台拒绝，请检查模型是否可用');
 }
 function loadAIConfig(){
   try{ const r=localStorage.getItem(AI_KEY); if(r) aiConfig=JSON.parse(r); }catch(e){}
@@ -14502,15 +14544,38 @@ const AI_TYPE_STRATEGIES = {
 // 4000 里能挤给正文的只剩二三百 token，解析写到 ①② 就 finish_reason=length。
 // 老模型（glm-4-flash 上限 4095）若因此 400，由 simplifySolution 里的
 // 「max_tokens 超限自愈」自动降档，不会把可用模型弄挂。
+// [AI 2026-10-21h] 其余六家思考档统一 4000 → 6000/8000：同样是与正文共享额度，
+// 4000 在长思考题上会被 reasoning 吃光 → 首轮必截断再多跑一轮续写（慢一倍、费一倍）。
+// 提档只抬上限、不催模型多想，延迟不变；真超平台上限时按阶梯 8000→6000→4000→2000→1500 自愈。
 const MAX_TOKENS_BY_PROVIDER = {
-  deepseek:    { normal: 2000, thinking: 4000 },
+  deepseek:    { normal: 2000, thinking: 6000 },
   zhipu:       { normal: 1200, thinking: 8000 },
-  openrouter:  { normal: 700,  thinking: 4000 },
-  qwen:        { normal: 800,  thinking: 4000 },
-  siliconflow: { normal: 800,  thinking: 4000 },
-  openai:      { normal: 1500, thinking: 4000 },
-  gemini:      { normal: 1500, thinking: 4000 }
+  openrouter:  { normal: 1500, thinking: 6000 },
+  qwen:        { normal: 1200, thinking: 6000 },
+  siliconflow: { normal: 1200, thinking: 6000 },
+  openai:      { normal: 1500, thinking: 8000 },
+  gemini:      { normal: 1500, thinking: 8000 }
 };
+// max_tokens 阶梯：撞平台上限时逐级下探，别只降一次就放弃
+const MT_LADDER = [8000, 6000, 4000, 2000, 1500];
+// ============================================================
+// [AI 2026-10-21h] 结束原因归一化 —— 别只认 'length'
+// ------------------------------------------------------------
+// 各家/各网关对「撞 max_tokens 被硬截断」的写法不统一：
+//   OpenAI / DeepSeek / Qwen / 智谱 / 硅基 / OpenRouter → 'length'
+//   vLLM、部分 Anthropic 转发网关                    → 'max_tokens'
+//   Gemini 原生（这里走 OpenAI 兼容层，理论上是 length） → 'MAX_TOKENS'
+// 只判 'length' 会在换模型时静默漏判，用户照样看到半截。
+// 另外智谱的内容审核拦截是 'sensitive'，正文会停在一半但续写也救不回来，
+// 必须单独给提示，不能当成"已写完"。
+function isTruncatedFinish(fr){
+  var v = String(fr || '').toLowerCase();
+  return v === 'length' || v === 'max_tokens' || v === 'max_output_tokens';
+}
+function isBlockedFinish(fr){
+  var v = String(fr || '').toLowerCase();
+  return v === 'sensitive' || v === 'content_filter' || v === 'contentfilter' || v === 'safety' || v === 'blocklist' || v === 'recitation';
+}
 // ============================================================
 // [AI 2026-10-21f] 思考模式：按各厂商**真实字段**下发，不再一刀切 reasoning_effort
 // ------------------------------------------------------------
@@ -14658,7 +14723,7 @@ async function simplifySolution(key, btn){
   const MAX_RETRY=3;
   let lastError=null;
   let thinkParamsStripped=false;   // 自愈标记：剔除过一次就不再重复剔除
-  let mtLowered=false;             // 自愈标记：max_tokens 超模型上限降过档就不再降
+  let mtLadderIdx=0;               // max_tokens 阶梯下探次数（见 MT_LADDER）
 
   for(let attempt=0; attempt<=MAX_RETRY; attempt++){
     let fullText='';
@@ -14690,11 +14755,21 @@ async function simplifySolution(key, btn){
         // [AI 2026-10-21g] max_tokens 超模型上限自愈：
         // 思考档提到 8000 后，glm-4-flash（上限 4095）这类老模型会直接 400/参数错误，
         // 降回 4000 重试一次（不吃重试次数）。判定必须带 max_tokens 特征，避免误伤思考参数 400。
-        if(!mtLowered && (resp.status === 400 || resp.status === 422) && /max[_\s]?tokens|max_tokens|上限|超出范围|1210/i.test(errText)){
-          mtLowered = true;
-          body.max_tokens = 4000;
-          attempt--;
-          throw new Error('max_tokens 超出该模型上限，已自动降档重试');
+        // [AI 2026-10-21h] 改成阶梯下探：8000→6000→4000→2000→1500，
+        // 一次只降一档（各平台上限差异大：glm-4-flash 4095、硅基免费 4096、
+        // DeepSeek 8192、OpenAI 16384），降一次就锁死反而会误伤能跑更大额度的模型。
+        if((resp.status === 400 || resp.status === 422) && /max[_\s]?tokens|上限|超出范围|1210/i.test(errText)){
+          const curTok = Number(body.max_tokens) || 0;
+          let nextTok = 0;
+          for(let i=0;i<MT_LADDER.length;i++){
+            if(MT_LADDER[i] < curTok){ nextTok = MT_LADDER[i]; break; }
+          }
+          if(nextTok){
+            body.max_tokens = nextTok;
+            mtLadderIdx++;
+            attempt--;   // 自愈不吃重试次数
+            throw new Error('max_tokens 超出该模型上限，已降到 ' + nextTok + ' 重试');
+          }
         }
         // 思考参数自愈：老模型 / 不支持该字段的模型会直接 400（未知参数），
         // 剔除思考参数后重试一次（不吃掉重试次数），避免"开思考"把本来能用的模型变不可用。
@@ -14730,8 +14805,12 @@ async function simplifySolution(key, btn){
             if(choice && choice.finish_reason) finishReason=String(choice.finish_reason);
             const delta=choice && choice.delta;
             if(delta){
-              if(delta.reasoning_content){
-                reasoningText+=delta.reasoning_content;
+              // [AI 2026-10-21h] 思考字段各家不一：多数 OpenAI 兼容层是 reasoning_content，
+              // OpenRouter 等网关给的是 reasoning。只认前者的后果是——正文被思考吃光时
+              // reasoningText 也是空，续写判不进来，用户看到"返回内容为空"重试 3 次后失败。
+              var _rc = delta.reasoning_content || (delta.content ? '' : delta.reasoning);
+              if(_rc){
+                reasoningText += _rc;
               }
               if(delta.content){
                 fullText+=delta.content;
@@ -14750,7 +14829,7 @@ async function simplifySolution(key, btn){
       // 2) 这里检测到 length 就续写，续写请求强制关闭思考（额度全给正文），最多 2 轮；
       // 3) 仍截断才在末尾明确提示，不再静默交付残缺解析。
       let contRounds=0;
-      while(finishReason==='length' && contRounds<2 && (fullText || reasoningText)){
+      while(isTruncatedFinish(finishReason) && contRounds<2 && (fullText || reasoningText)){
         contRounds++;
         finishReason='';
         const contBody=Object.assign({}, body, buildThinkingParams(aiConfig.provider, false), {
@@ -14760,7 +14839,7 @@ async function simplifySolution(key, btn){
             {role:'assistant', content: fullText},
             {role:'user', content: '继续。紧接着上面最后一个字往下写，不要重复已写内容，不要重新开头，不要加任何说明、总结或收尾语。'}
           ]) : body.messages.slice(),
-          max_tokens: maxTok,
+          max_tokens: Number(body.max_tokens) || maxTok,   // 用当前（可能已降档）额度
           stream: true
         });
         // 再兜一遍：确保续写请求真的不带思考（各家字段名不同，统一关死）
@@ -14789,6 +14868,7 @@ async function simplifySolution(key, btn){
                 const cChoice=cJson.choices && cJson.choices[0];
                 if(cChoice && cChoice.finish_reason) finishReason=String(cChoice.finish_reason);
                 const cDelta=cChoice && cChoice.delta;
+                if(cDelta && !cDelta.content && cDelta.reasoning) reasoningText += cDelta.reasoning;
                 if(cDelta && cDelta.content){
                   fullText+=cDelta.content;
                   if(streamTarget) streamTarget.textContent=fullText;
@@ -14799,8 +14879,12 @@ async function simplifySolution(key, btn){
           }
         }catch(e){ break; }
       }
-      if(finishReason==='length'){
+      if(isTruncatedFinish(finishReason)){
         fullText+='\n\n⚠️ 输出已达模型单次长度上限，以上内容可能未写完；再次点击「AI 简化解析」可重试。';
+      } else if(isBlockedFinish(finishReason)){
+        // 内容审核拦截（智谱发 sensitive，OpenAI 系发 content_filter）：正文停在一半，
+        // 续写同样会被拦，只能告知用户，不能假装写完了。
+        fullText+='\n\n⚠️ 该回答被模型平台的内容安全策略中断（finish_reason=' + finishReason + '），以上不是完整解析。';
       }
 
       if(!fullText && reasoningText) fullText=reasoningText;
@@ -15009,7 +15093,9 @@ async function sendChatMessage(key) {
       model: aiConfig.model || ep.model,
       messages: aiMessages,
       temperature: 0.2,
-      max_tokens: aiConfig.enableThinking ? 4000 : 1500,
+      // [AI 2026-10-21h] 思考档 4000 → 6000、普通 1500 → 2000：与正文共享额度，
+      // 4000 在长思考追问下会被 reasoning 吃光，答案只出半句；超平台上限由 requestAI 阶梯降档兜。
+      max_tokens: aiConfig.enableThinking ? 6000 : 2000,
       ...thinkParams
     };
     if (aiConfig.provider === 'deepseek' && enableSearch) {
@@ -15029,10 +15115,20 @@ async function sendChatMessage(key) {
       extras: thinkParams
     });
     const data = response.data;
-    const msg = data.choices && data.choices[0] && data.choices[0].message;
-    const text = (msg && msg.content) || (msg && msg.reasoning_content) || '';
-    if (!text) throw new Error('返回格式异常');
-    const reasoning = msg && msg.reasoning_content ? msg.reasoning_content : '';
+    const choice0 = data.choices && data.choices[0];
+    const msg = choice0 && choice0.message;
+    const finish = choice0 && choice0.finish_reason;
+    // [AI 2026-10-21h] 正文为空时**不再**拿 reasoning_content 顶替回答：
+    // 那会把"我要先分析一下…"直接当成答案显示。改成明确报错，让用户关思考或换模型。
+    let text = (msg && msg.content) || '';
+    const reasoning = msg && (msg.reasoning_content || msg.reasoning) ? (msg.reasoning_content || msg.reasoning) : '';
+    if (!text) {
+      if (reasoning) throw new Error('模型把额度都用在思考上了，没输出答案；关掉思考模式或换个模型再问');
+      throw new Error('返回格式异常');
+    }
+    // 撞长度上限 / 被内容审核拦截时明确标注，否则用户以为 AI 就想说这么多
+    if (isTruncatedFinish(finish)) text += '\n\n⚠️ 回答已达单次长度上限被截断，可发「继续」接着说。';
+    else if (isBlockedFinish(finish)) text += '\n\n⚠️ 该回答被模型平台的内容安全策略中断，不完整。';
     const loadingEl = document.getElementById('loading-' + key);
     if (loadingEl) loadingEl.remove();
     messages.push({
