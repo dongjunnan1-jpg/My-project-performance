@@ -419,23 +419,25 @@
     overflow: hidden !important;
     box-sizing: border-box !important;
 }
-/* ≤768px：4 个控件挤一行时「子模块：自动识别」必被截断，改 2×2；间距仍是 8px，不再出现空隙 */
+/* 任何宽度都保持一行四列（用户 2026-10-21 明确要求：不要 2×2，太高太冗余）。
+   窄屏靠缩字号 + 收内边距尽量多露几个字；`overflow:hidden` 保证只裁字、绝不溢出。 */
 @media (max-width: 768px) {
-    .upload-zone { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
     .upload-zone select,
     .upload-zone input,
-    .upload-zone button { font-size: 12px !important; }
+    .upload-zone button {
+        font-size: 11px !important;
+        padding-left: 6px !important;
+        padding-right: 6px !important;
+    }
 }
-@media (max-width: 400px) {
+@media (max-width: 430px) {
     .upload-zone select,
     .upload-zone input,
-    .upload-zone button { font-size: 11px !important; }
-}
-@media (max-width: 340px) {
-    /* 320px 极限宽度：左右内边距各收 8px，保证「子模块：自动识别」不被裁 */
-    .upload-zone select,
-    .upload-zone input,
-    .upload-zone button { padding-left: 4px !important; padding-right: 4px !important; }
+    .upload-zone button {
+        font-size: 10.5px !important;
+        padding-left: 4px !important;
+        padding-right: 4px !important;
+    }
 }
 
 /* 电脑端统计区域分布 */
@@ -3327,7 +3329,7 @@ body.skin-dark .en-pagination button.active {
             <option value="资料分析">资料分析</option>
         </select>
         <input type="file" id="fileInput" accept=".json" multiple style="display:none;">
-        <button type="button" id="uploadButton" class="btn btn-outline">📁 上传</button>
+        <button type="button" id="uploadButton" class="btn btn-outline">上传</button>
     </div>
 
     <!-- 文件列表（标签页形式） -->
@@ -3406,9 +3408,9 @@ body.skin-dark .en-pagination button.active {
             <button class="btn btn-outline" onclick="document.getElementById('backupInput').click()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.8" y="10.6" width="16.4" height="9.6" rx="1.8"/><path d="M3.8 14.2h16.4"/><path d="M12 3.4v5.9"/><path d="M9.8 7.1L12 9.3l2.2-2.2"/></svg>导入备份</button>
             <button class="btn btn-outline" onclick="window.print()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7.2 8.2V3.8h9.6v4.4"/><rect x="3.6" y="8.2" width="16.8" height="7.2" rx="1.8"/><path d="M7.2 15.4h9.6v4.8H7.2z"/></svg>打印</button>
             <button class="btn btn-outline" onclick="resetProgress()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19.8 12a7.8 7.8 0 1 1-2.4-5.6"/><path d="M19.9 3.9v4.5h-4.5"/></svg>重置进度</button>
-            <button class="btn btn-outline wrong-only-btn" onclick="viewWrongSet()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6 4.2h8.6a2.6 2.6 0 0 1 2.6 2.6v13H9.2a2.6 2.6 0 0 0-2.6 2.6z"/><path d="M6.6 6.8a2.6 2.6 0 0 1 2.6-2.6"/><path d="M10.2 9.6l4.4 4.4M14.6 9.6l-4.4 4.4"/></svg>错题集<span id="wrongCount">0</span></button>
+            <button class="btn btn-outline wrong-only-btn" onclick="viewWrongSet()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6 4.2h8.6a2.6 2.6 0 0 1 2.6 2.6v13H9.2a2.6 2.6 0 0 0-2.6 2.6z"/><path d="M6.6 6.8a2.6 2.6 0 0 1 2.6-2.6"/><path d="M10.2 9.6l4.4 4.4M14.6 9.6l-4.4 4.4"/></svg>错题集：<span id="wrongCount">0</span></button>
             <button class="btn btn-outline wrong-only-btn" onclick="exportWrong()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6 4.2h8.6a2.6 2.6 0 0 1 2.6 2.6v13H9.2a2.6 2.6 0 0 0-2.6 2.6z"/><path d="M6.6 6.8a2.6 2.6 0 0 1 2.6-2.6"/><path d="M12.2 16.6V9.8"/><path d="M9.8 12.2l2.4-2.4 2.4 2.4"/></svg>导出错题本</button>
-            <button class="btn btn-outline review-only-btn" id="reviewEntryBtn" onclick="startReview()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.6" y="5.4" width="16.8" height="15" rx="2.2"/><path d="M3.6 10.2h16.8"/><path d="M8.4 3.4v3.6M15.6 3.4v3.6"/><path d="M9.2 14.6l2 2 3.6-3.8"/></svg>今日复盘<span id="reviewDueCount">0</span></button>
+            <button class="btn btn-outline review-only-btn" id="reviewEntryBtn" onclick="startReview()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.6" y="5.4" width="16.8" height="15" rx="2.2"/><path d="M3.6 10.2h16.8"/><path d="M8.4 3.4v3.6M15.6 3.4v3.6"/><path d="M9.2 14.6l2 2 3.6-3.8"/></svg>今日复盘：<span id="reviewDueCount">0</span></button>
             <button class="btn btn-outline review-only-btn" id="reviewExitBtn" onclick="exitReview()" style="display:none;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.6 4.6h4.6a1.8 1.8 0 0 1 1.8 1.8v11.2a1.8 1.8 0 0 1-1.8 1.8h-4.6"/><path d="M9.4 8.4L5.8 12l3.6 3.6"/><path d="M5.8 12h8.8"/></svg>退出复盘</button>
             <button class="btn btn-outline auto-solution-btn" id="toggleAutoSolutionBtn" type="button" onclick="toggleAutoSolution()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6.2C10.3 4.7 8.2 4 5.4 4c-.9 0-1.6.7-1.6 1.6v10.6c0 .9.7 1.6 1.6 1.6 2.8 0 4.9.7 6.6 2.2 1.7-1.5 3.8-2.2 6.6-2.2.9 0 1.6-.7 1.6-1.6V5.6c0-.9-.7-1.6-1.6-1.6-2.8 0-4.9.7-6.6 2.2z"/><path d="M12 6.2v13.8"/></svg><span class="ctl-label">自动解析：开</span></button>
             <button class="btn btn-outline ms-only-btn" id="msNoteFilterBtn" onclick="toggleMsNoteFilter()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6 4.2h8.6a2.6 2.6 0 0 1 2.6 2.6v13H9.2a2.6 2.6 0 0 0-2.6 2.6z"/><path d="M6.6 6.8a2.6 2.6 0 0 1 2.6-2.6"/><path d="M10.4 9.6h5.4M10.4 13h5.4M10.4 16.4h3.4"/></svg>只显示心得</button>
@@ -15964,8 +15966,8 @@ window.updateSubTypeFilter();
 if (window.innerWidth <= 768) {
     var btnF = document.getElementById('uploadButton');
     var btnU = document.querySelector('.upload-zone button:last-child');
-    if (btnF) btnF.textContent = '📁 上传';
-    if (btnU && btnU.textContent.includes('已上传')) btnU.textContent = '📄 文件';
+    if (btnF) btnF.textContent = '上传';
+    if (btnU && btnU.textContent.includes('已上传')) btnU.textContent = '文件';
 }
   // 已上传文件切换按钮
 (function() {
@@ -15974,7 +15976,7 @@ if (window.innerWidth <= 768) {
     
     if (fileList && selectBtn) {
         var toggleBtn = document.createElement('button');
-        toggleBtn.textContent = '📄文件';
+        toggleBtn.textContent = '文件';
         toggleBtn.style.cssText = 'padding:1px 3px;font-size:10px;border-radius:4px;cursor:pointer;border:1px solid #ccc;background:#fff;min-height:20px;color:var(--deep);';   /* [FIX 20261001c] 文字色与同区 select 统一 */
         toggleBtn.type = 'button';
 toggleBtn.onclick = function(e) {
@@ -15982,10 +15984,10 @@ toggleBtn.onclick = function(e) {
     e.stopPropagation();
     if (fileList.style.display === 'none') {
         fileList.style.display = 'block';
-        toggleBtn.textContent = '📄收起';
+        toggleBtn.textContent = '收起';
     } else {
         fileList.style.display = 'none';
-        toggleBtn.textContent = '📄文件';
+        toggleBtn.textContent = '文件';
     }
     return false;
 };
