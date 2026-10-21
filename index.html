@@ -14251,29 +14251,42 @@ function loadAIConfig(){
   try{ const r=localStorage.getItem(AI_KEY); if(r) aiConfig=JSON.parse(r); }catch(e){}
   if(!aiConfig||typeof aiConfig!=='object') aiConfig={provider:'',apiKey:'',model:'',enableSearch:false};
   if(!aiConfig.providerConfigs||typeof aiConfig.providerConfigs!=='object'||Array.isArray(aiConfig.providerConfigs)) aiConfig.providerConfigs={};
-  // 旧配置自愈：历史默认值写的是平台已下线的模型代码（智谱 glm-4.1 → HTTP 400 / 1211 模型不存在），
-  // 留着会让用户一点「简化解析」必失败。加载时静默换回当前可用的默认模型。
-  var LEGACY_AI_MODELS = {zhipu:['glm-4.1','glm-4']};
-  Object.keys(LEGACY_AI_MODELS).forEach(function(pid){
-    var pc = aiConfig.providerConfigs[pid];
-    if(!pc || !pc.model) return;
-    if(LEGACY_AI_MODELS[pid].indexOf(String(pc.model).trim()) >= 0){
-      pc.model = (AI_ENDPOINTS[pid] && AI_ENDPOINTS[pid].model) || '';
-      console.log('[AI] 模型代码已下线，自动切换到 ' + pc.model);
-    }
-  });
-  try{ localStorage.setItem(AI_KEY, JSON.stringify(aiConfig)); }catch(e){}
-  aiConfig.enableSearch = !!aiConfig.enableSearch;
-  aiConfig.enableThinking = !!aiConfig.enableThinking;
+  // ★ 顺序铁律（2026-10-21 修）：先做「顶层 apiKey/model → providerConfigs」迁移，**再**做模型自愈。
+  //   反过来的话，只存了顶层 model 的老配置会漏过自愈，永远停在已弃用的模型代码上。
   const p=document.getElementById('aiProvider');
   const provider=aiConfig.provider||(p&&p.value)||'';
   if(provider&&!aiConfig.providerConfigs[provider]&&(aiConfig.apiKey||aiConfig.model)){
     aiConfig.providerConfigs[provider]={apiKey:aiConfig.apiKey||'',model:aiConfig.model||''};
   }
   aiConfig.provider=provider;
+  // 旧配置自愈：智谱默认模型换过三代，历史存下来的代码要么已被平台下线
+  // （glm-4.1 → HTTP 400 / code=1211「模型不存在」），要么明确会输出角色声明废话
+  // （glm-4.7-flash，2026-10-09 实测）→ 静默换回当前默认 = **glm-4-flash**（AI_ENDPOINTS.zhipu.model）。
+  // 改默认值时两版要同步；历史键只增不删，保证老存档能被认出来。
+  var LEGACY_AI_MODELS = {zhipu:['glm-4.7-flash','glm-4.7','glm-4.1','glm-4']};
+  var healedModels = [];
+  Object.keys(LEGACY_AI_MODELS).forEach(function(pid){
+    var legacy = LEGACY_AI_MODELS[pid];
+    var fallbackModel = (AI_ENDPOINTS[pid] && AI_ENDPOINTS[pid].model) || '';
+    var pc = aiConfig.providerConfigs[pid];
+    if(pc && pc.model && legacy.indexOf(String(pc.model).trim().toLowerCase()) >= 0){
+      healedModels.push(String(pc.model).trim() + ' → ' + fallbackModel);
+      pc.model = fallbackModel;
+    }
+    // 更老的形态：aiConfig.models[provider] 单独存一份模型代码，面板取值时优先级还高于 model
+    if(aiConfig.models && typeof aiConfig.models==='object' && aiConfig.models[pid]
+       && legacy.indexOf(String(aiConfig.models[pid]).trim().toLowerCase()) >= 0){
+      healedModels.push(String(aiConfig.models[pid]).trim() + ' → ' + fallbackModel);
+      aiConfig.models[pid] = fallbackModel;
+    }
+  });
+  healedModels.forEach(function(msg){ console.log('[AI] 模型代码已弃用，自动切换：' + msg); });
   const providerConfig=aiConfig.providerConfigs[provider]||{};
   aiConfig.apiKey=providerConfig.apiKey||'';
   aiConfig.model=providerConfig.model||'';
+  aiConfig.enableSearch = !!aiConfig.enableSearch;
+  aiConfig.enableThinking = !!aiConfig.enableThinking;
+  try{ localStorage.setItem(AI_KEY, JSON.stringify(aiConfig)); }catch(e){}
   if(p){
     p.value=provider;
     p.addEventListener('change',handleAIProviderChange);
