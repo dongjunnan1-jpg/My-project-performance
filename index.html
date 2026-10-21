@@ -1042,20 +1042,22 @@ body.skin-dark .search-float-counter { color:#a0aec0; }
 .q-speak-btn:hover { background:var(--light); transform:scale(1.06); }
 .q-speak-btn.speaking { animation:q-speak-pulse 1.1s ease-in-out infinite; background:var(--main); color:#fff; }
 @keyframes q-speak-pulse { 0%,100% { box-shadow:0 0 0 0 rgba(74,144,217,.45); } 50% { box-shadow:0 0 0 8px rgba(74,144,217,0); } }
-/* [COPY 2026-10-21] 题目一键复制按钮：与 🔊 朗读按钮同族（同尺寸/同描边/同悬停），
-   只出现在 gk / mk / sy 三个分区，由 JS 动态插入到「做过N次」右边。 */
-.q-title .q-copy-btn { width:32px; height:32px; padding:0; border:1px solid var(--main); border-radius:50%;
-  background:#fff; color:var(--deep); cursor:pointer; flex:0 0 auto; display:inline-flex;
+/* [COPY 2026-10-21] 题目一键复制按钮：只出现在 gk / mk / sy 三个分区，
+   由 JS 动态插入到「做过N次」右边。
+   [COPY 2026-10-21b] 尺寸改为与收藏 ☆（16px 纯字符、无边框）同一比例：
+   去掉 32px 圆环与白底，视觉上只剩一枚 16px 图标；26px 盒只做点击热区，不显示。 */
+.q-title .q-copy-btn { width:26px; height:26px; padding:0; border:0; border-radius:50%;
+  background:transparent; color:var(--text); cursor:pointer; flex:0 0 auto; display:inline-flex;
   align-items:center; justify-content:center; -webkit-tap-highlight-color:transparent;
-  touch-action:manipulation; transition:background .18s, color .18s, border-color .18s, transform .18s; }
-.q-title .q-copy-btn:hover { background:var(--light); transform:scale(1.06); }
-.q-title .q-copy-btn:active { transform:scale(.94); }
+  touch-action:manipulation; transition:background .18s, color .18s; }
+.q-title .q-copy-btn:hover { background:var(--light); color:var(--deep); }
+.q-title .q-copy-btn:active { background:var(--mid); }
 .q-title .q-copy-btn svg { width:16px; height:16px; display:block; pointer-events:none; }
-.q-title .q-copy-btn.done { border-color:#10b981; color:#10b981; background:#ecfdf5; }
-.q-title .q-copy-btn.fail { border-color:#ef4444; color:#ef4444; background:#fef2f2; }
+.q-title .q-copy-btn.done { color:#10b981; }
+.q-title .q-copy-btn.fail { color:#ef4444; }
 @media (max-width:360px){
-  .q-title .q-copy-btn { width:28px; height:28px; }
-  .q-title .q-copy-btn svg { width:14px; height:14px; }
+  .q-title .q-copy-btn { width:24px; height:24px; }
+  .q-title .q-copy-btn svg { width:15px; height:15px; }
 }
 .q-content { font-size: 15px; line-height: 1.8; margin-bottom: 12px; }
 .q-options .option { padding: 8px 14px; margin: 5px 0; background: var(--bg); border-radius: 8px; cursor: pointer; border: 2px solid transparent; transition: .15s; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
