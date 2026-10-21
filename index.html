@@ -127,6 +127,10 @@
       }
       out += '@media (min-width:640px){' + hs.join(',') + '{background-image:url("data:image/svg+xml,' + encodeURIComponent(SVG.replace('__C__', stroke).replace('__B__', ESSAY[k][1])) + '"),' + caretUrl + ' !important}}\n';
     }
+    /* [UI 2026-10-21f] 控制栏搜索框的放大镜：与筛选栏同一套线稿 + 同一套取色逻辑 */
+    var SEARCH_ICO = "<circle cx='11' cy='11' r='6.6'/><path d='M16 16l4.2 4.2'/>";
+    out += 'body #searchBox,body.mobile-mode #searchBox,body.pc-mode #searchBox{background-image:url("data:image/svg+xml,'
+         + encodeURIComponent(SVG.replace('__C__', stroke).replace('__B__', SEARCH_ICO)) + '") !important}\n';
     return out;
   }
   function apply(){
@@ -799,6 +803,82 @@ body:not(.essay-zone) .ratio-input { -moz-appearance: textfield !important; }
   body.mobile-mode:not(.essay-zone) .filter-bar button[onclick*="clearFilters"],
   body.pc-mode:not(.essay-zone) .filter-bar button[onclick*="clearFilters"] { padding: 0 16px 0 22px !important; white-space: nowrap !important; font-size: 10.5px !important; }
 
+}
+
+/* ===== [UI 2026-10-21f] 控制栏（搜索框 + 操作按钮）与筛选栏统一风格 =====
+   令牌与 [UI 2026-10-21] 完全同源：1px #d8c3c7 描边 / 8px 圆角 / 纯白底 / var(--deep) 文字 /
+   46px（手机）·52px（≥769px）高度 / 15px 线稿图标（stroke 1.7，currentColor）/ 无阴影、
+   hover 只变色不位移。emoji 全部换成与筛选栏同组的线稿图标。
+   ★ 间距**一律沿用现状**：搜索框↔按钮 10px（.controls 的 gap，本文不动）、按钮之间 8px、
+     按钮↔卡片边缘 10/14px（与 .filter-bar 的 padding 完全一致）。
+   ★ 手机改 3 列：4 列时每格仅 87px，「导出错题本 / 今日复盘0」这类五字标签 + 图标必被裁（实测）。 */
+#controls {
+  background: #fff !important;
+  padding: 10px 14px !important;
+  border-radius: 12px !important;
+  box-shadow: var(--shadow) !important;
+}
+#controls .search-row .search-box {
+  -webkit-appearance: none; appearance: none;
+  height: 46px !important; min-height: 46px !important;
+  padding: 0 12px 0 32px !important;
+  font-size: 12px !important; font-weight: 500 !important;
+  color: var(--deep) !important; background-color: #fff !important;
+  border: 1px solid #d8c3c7 !important; border-radius: 8px !important;
+  box-shadow: none !important;
+  background-repeat: no-repeat; background-position: 9px center; background-size: 15px 15px;
+}
+#controls .search-row .search-box::placeholder { color: var(--deep) !important; opacity: .5 !important; font-weight: 500 !important; }
+#controls .search-row .search-box:focus { border-color: var(--main) !important; box-shadow: none !important; }
+@media (max-width: 768px) {
+  #controls .controls-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+}
+#controls .controls-grid .btn {
+  position: relative;
+  height: 46px !important; min-height: 46px !important;
+  padding: 0 18px 0 26px !important;
+  font-size: 11.5px !important; font-weight: 500 !important; line-height: 1.15 !important;
+  color: var(--deep) !important; background: #fff !important;
+  border: 1px solid #d8c3c7 !important; border-radius: 8px !important;
+  box-shadow: none !important; transform: none !important;
+  display: flex; align-items: center; justify-content: center;
+  white-space: nowrap !important; overflow: hidden !important;
+}
+#controls .controls-grid .btn:hover {
+  background: #fff !important; color: var(--deep) !important;
+  border-color: var(--main) !important; box-shadow: none !important; transform: none !important;
+}
+#controls .controls-grid .btn:active {
+  background: var(--light) !important; color: var(--deep) !important;
+  border-color: var(--main) !important; transform: none !important;
+}
+#controls .controls-grid .btn.is-active {
+  background: var(--light) !important; color: var(--deep) !important;
+  border-color: var(--main) !important;
+}
+#controls .controls-grid .btn svg {
+  position: absolute; left: 7px; top: 50%; transform: translateY(-50%);
+  width: 15px; height: 15px; flex: 0 0 15px; pointer-events: none;
+}
+@media (min-width: 769px) {
+  #controls .search-row .search-box {
+    height: 52px !important; min-height: 52px !important;
+    font-size: 13px !important; padding: 0 14px 0 34px !important;
+    background-position: 10px center;
+  }
+  #controls .controls-grid .btn {
+    height: 52px !important; min-height: 52px !important;
+    font-size: 13px !important; padding: 0 22px 0 26px !important;
+  }
+  #controls .controls-grid .btn svg { left: 9px; width: 16px; height: 16px; flex-basis: 16px; }
+}
+@media (max-width: 360px) {
+  #controls .controls-grid .btn { font-size: 10.5px !important; padding: 0 14px 0 22px !important; }
+  #controls .controls-grid .btn svg { left: 5px; width: 14px; height: 14px; flex-basis: 14px; }
+}
+@media (max-width: 340px) {
+  #controls .controls-grid .btn { font-size: 10px !important; padding: 0 10px 0 18px !important; }
+  #controls .controls-grid .btn svg { left: 3px; width: 13px; height: 13px; flex-basis: 13px; }
 }
 
 /* ===== [UI 2026-10-21c] 面试分区：4 个筛选格排成一行（地区 / 排序 / 题型 / 清除筛选） ===== */
@@ -3291,28 +3371,28 @@ body.skin-dark .en-pagination button.active {
     <!-- 控制栏 -->
     <div class="controls" id="controls" style="display:none;">
         <div class="search-row">
-            <input type="text" class="search-box" id="searchBox" placeholder="🔍 搜索题目...">
+            <input type="text" class="search-box" id="searchBox" placeholder="搜索题目...">
             <span class="search-nav" id="searchNav" style="display:none;">
                 <span class="search-nav-counter" id="searchNavCounter">搜索结果：0 / 0</span>
             </span>
         </div>
         <div class="controls-grid">
-            <button class="btn btn-outline" onclick="exportFiltered()">📤 导出筛选</button>
-            <button class="btn btn-outline" onclick="exportBackup()">💾 导出备份</button>
-            <button class="btn btn-outline" onclick="document.getElementById('backupInput').click()">📥 导入备份</button>
-            <button class="btn btn-outline" onclick="window.print()">🖨️ 打印</button>
-            <button class="btn btn-outline" onclick="resetProgress()">🔄 重置进度</button>
-            <button class="btn btn-outline wrong-only-btn" onclick="viewWrongSet()">📒 错题集<span id="wrongCount">0</span></button>
-            <button class="btn btn-outline wrong-only-btn" onclick="exportWrong()">📕 导出错题本</button>
-            <button class="btn btn-outline review-only-btn" id="reviewEntryBtn" onclick="startReview()">🔄 今日复盘<span id="reviewDueCount">0</span></button>
-            <button class="btn btn-outline review-only-btn" id="reviewExitBtn" onclick="exitReview()" style="display:none;">✕ 退出复盘</button>
-            <button class="btn btn-outline auto-solution-btn" id="toggleAutoSolutionBtn" type="button" onclick="toggleAutoSolution()">📖 自动解析：开</button>
-            <button class="btn btn-outline ms-only-btn" id="msNoteFilterBtn" onclick="toggleMsNoteFilter()">📝 只显示心得</button>
-            <button class="btn btn-outline ms-only-btn" id="msFavFilterBtn" onclick="toggleMsFavFilter()">⭐ 只显示收藏</button>
-            <button class="btn btn-outline sl-only-btn" id="slNoteFilterBtn" onclick="toggleSlNoteFilter()">📝 只显示有笔记</button>
-            <button class="btn btn-outline sl-only-btn" id="slFavFilterBtn" onclick="toggleSlFavFilter()">⭐ 只显示收藏</button>
-            <button class="btn btn-outline zy-only-btn" id="zyNoteFilterBtn" onclick="toggleZyNoteFilter()">📝 只显示有笔记</button>
-            <button class="btn btn-outline zy-only-btn" id="zyFavFilterBtn" onclick="toggleZyFavFilter()">⭐ 只显示收藏</button>
+            <button class="btn btn-outline" onclick="exportFiltered()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.8v10.2"/><path d="M8.4 7.6L12 4l3.6 3.6"/><path d="M4.4 14.4v3.4a2.2 2.2 0 0 0 2.2 2.2h10.8a2.2 2.2 0 0 0 2.2-2.2v-3.4"/></svg>导出筛选</button>
+            <button class="btn btn-outline" onclick="exportBackup()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.8" y="10.6" width="16.4" height="9.6" rx="1.8"/><path d="M3.8 14.2h16.4"/><path d="M12 3.4v5.8"/><path d="M9.8 5.8L12 3.6l2.2 2.2"/></svg>导出备份</button>
+            <button class="btn btn-outline" onclick="document.getElementById('backupInput').click()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.8" y="10.6" width="16.4" height="9.6" rx="1.8"/><path d="M3.8 14.2h16.4"/><path d="M12 3.4v5.9"/><path d="M9.8 7.1L12 9.3l2.2-2.2"/></svg>导入备份</button>
+            <button class="btn btn-outline" onclick="window.print()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7.2 8.2V3.8h9.6v4.4"/><rect x="3.6" y="8.2" width="16.8" height="7.2" rx="1.8"/><path d="M7.2 15.4h9.6v4.8H7.2z"/></svg>打印</button>
+            <button class="btn btn-outline" onclick="resetProgress()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19.8 12a7.8 7.8 0 1 1-2.4-5.6"/><path d="M19.9 3.9v4.5h-4.5"/></svg>重置进度</button>
+            <button class="btn btn-outline wrong-only-btn" onclick="viewWrongSet()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6 4.2h8.6a2.6 2.6 0 0 1 2.6 2.6v13H9.2a2.6 2.6 0 0 0-2.6 2.6z"/><path d="M6.6 6.8a2.6 2.6 0 0 1 2.6-2.6"/><path d="M10.2 9.6l4.4 4.4M14.6 9.6l-4.4 4.4"/></svg>错题集<span id="wrongCount">0</span></button>
+            <button class="btn btn-outline wrong-only-btn" onclick="exportWrong()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6 4.2h8.6a2.6 2.6 0 0 1 2.6 2.6v13H9.2a2.6 2.6 0 0 0-2.6 2.6z"/><path d="M6.6 6.8a2.6 2.6 0 0 1 2.6-2.6"/><path d="M12.2 16.6V9.8"/><path d="M9.8 12.2l2.4-2.4 2.4 2.4"/></svg>导出错题本</button>
+            <button class="btn btn-outline review-only-btn" id="reviewEntryBtn" onclick="startReview()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.6" y="5.4" width="16.8" height="15" rx="2.2"/><path d="M3.6 10.2h16.8"/><path d="M8.4 3.4v3.6M15.6 3.4v3.6"/><path d="M9.2 14.6l2 2 3.6-3.8"/></svg>今日复盘<span id="reviewDueCount">0</span></button>
+            <button class="btn btn-outline review-only-btn" id="reviewExitBtn" onclick="exitReview()" style="display:none;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.6 4.6h4.6a1.8 1.8 0 0 1 1.8 1.8v11.2a1.8 1.8 0 0 1-1.8 1.8h-4.6"/><path d="M9.4 8.4L5.8 12l3.6 3.6"/><path d="M5.8 12h8.8"/></svg>退出复盘</button>
+            <button class="btn btn-outline auto-solution-btn" id="toggleAutoSolutionBtn" type="button" onclick="toggleAutoSolution()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6.2C10.3 4.7 8.2 4 5.4 4c-.9 0-1.6.7-1.6 1.6v10.6c0 .9.7 1.6 1.6 1.6 2.8 0 4.9.7 6.6 2.2 1.7-1.5 3.8-2.2 6.6-2.2.9 0 1.6-.7 1.6-1.6V5.6c0-.9-.7-1.6-1.6-1.6-2.8 0-4.9.7-6.6 2.2z"/><path d="M12 6.2v13.8"/></svg><span class="ctl-label">自动解析：开</span></button>
+            <button class="btn btn-outline ms-only-btn" id="msNoteFilterBtn" onclick="toggleMsNoteFilter()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6 4.2h8.6a2.6 2.6 0 0 1 2.6 2.6v13H9.2a2.6 2.6 0 0 0-2.6 2.6z"/><path d="M6.6 6.8a2.6 2.6 0 0 1 2.6-2.6"/><path d="M10.4 9.6h5.4M10.4 13h5.4M10.4 16.4h3.4"/></svg>只显示心得</button>
+            <button class="btn btn-outline ms-only-btn" id="msFavFilterBtn" onclick="toggleMsFavFilter()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.4l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 10.1l5.4-.8z"/></svg>只显示收藏</button>
+            <button class="btn btn-outline sl-only-btn" id="slNoteFilterBtn" onclick="toggleSlNoteFilter()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6 4.2h8.6a2.6 2.6 0 0 1 2.6 2.6v13H9.2a2.6 2.6 0 0 0-2.6 2.6z"/><path d="M6.6 6.8a2.6 2.6 0 0 1 2.6-2.6"/><path d="M10.4 9.6h5.4M10.4 13h5.4M10.4 16.4h3.4"/></svg>只显示笔记</button>
+            <button class="btn btn-outline sl-only-btn" id="slFavFilterBtn" onclick="toggleSlFavFilter()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.4l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 10.1l5.4-.8z"/></svg>只显示收藏</button>
+            <button class="btn btn-outline zy-only-btn" id="zyNoteFilterBtn" onclick="toggleZyNoteFilter()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6 4.2h8.6a2.6 2.6 0 0 1 2.6 2.6v13H9.2a2.6 2.6 0 0 0-2.6 2.6z"/><path d="M6.6 6.8a2.6 2.6 0 0 1 2.6-2.6"/><path d="M10.4 9.6h5.4M10.4 13h5.4M10.4 16.4h3.4"/></svg>只显示笔记</button>
+            <button class="btn btn-outline zy-only-btn" id="zyFavFilterBtn" onclick="toggleZyFavFilter()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.4l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 10.1l5.4-.8z"/></svg>只显示收藏</button>
         </div>
         <input type="file" id="backupInput" accept="application/json,.json" style="display:none;" onchange="importBackup(this)">
     </div>
@@ -4250,9 +4330,13 @@ function updateAutoSolutionBtnState(){
   const btn = document.getElementById('toggleAutoSolutionBtn');
   if(!btn) return;
   const stateText = autoShowSolution ? '开' : '关';
-  btn.textContent = (window.innerWidth <= AUTO_SOLUTION_MOBILE_MAX)
-    ? '📖 解析：' + stateText       // 手机端：1/4 网格宽，用短文案
-    : '📖 自动解析：' + stateText;  // 电脑端：完整文案
+  // [UI 2026-10-21f] 图标是常驻的内联 <svg>，只能改 .ctl-label 里的字；
+  // 直接写 btn.textContent 会把图标一起冲掉（旧写法见 git 历史）。
+  const labelTxt = (window.innerWidth <= AUTO_SOLUTION_MOBILE_MAX)
+    ? '解析：' + stateText       // 手机端：一格更窄，用短文案
+    : '自动解析：' + stateText;  // 电脑端：完整文案
+  const lblEl = btn.querySelector('.ctl-label');
+  if (lblEl) lblEl.textContent = labelTxt; else btn.textContent = '📖 ' + labelTxt;
   // 按用户要求：始终 btn-outline（浅色底、主题色描边），只有 hover/点击才加深
   // 视觉状态由按钮文案「开 / 关」表达，不用持久深色
   btn.classList.remove('btn-primary');
