@@ -111,6 +111,22 @@
       if (ICONS[i][2]) out += '@media (min-width:769px){' + msHead + '{background-image:' + iconUrl + ',' + caretUrl + ' !important}}\n';
       out += '@media (max-width:340px){' + msHead + '{background-image:none !important}}\n';
     }
+    /* 申论 / 综应筛选栏（.essay-top-filter）：与九宫格同款图标 + 箭头，仅在格子够宽（≥640px）时显示；
+       手机窄屏 5 格挤一行放不下，纯文字（见 [UI 2026-10-21e] 样式）。 */
+    var ESSAY = [
+      ['#slYearFilter,#zyYearFilter',         "<rect x='3' y='5' width='18' height='16' rx='2'/><path d='M8 3v4M16 3v4M3 10h18'/>"],
+      ['#slProvinceFilter,#zyProvinceFilter', "<path d='M12 21s7-5.3 7-11a7 7 0 1 0-14 0c0 5.7 7 11 7 11z'/><circle cx='12' cy='10' r='2.5'/>"],
+      ['#slTopicFilter,#zyTopicFilter',       "<path d='M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z'/><circle cx='8' cy='8' r='1.4'/>"],
+      ['#slLeafFilter,#zyLeafFilter',         "<path d='M5 4v7a4 4 0 0 0 4 4h10'/><path d='M16 12l3 3-3 3'/>"]
+    ];
+    for (var k = 0; k < ESSAY.length; k++){
+      var ids = ESSAY[k][0].split(',');
+      var hs = [];
+      for (var j = 0; j < ids.length; j++){
+        hs.push('body .filter-bar ' + ids[j], 'body.mobile-mode .filter-bar ' + ids[j], 'body.pc-mode .filter-bar ' + ids[j]);
+      }
+      out += '@media (min-width:640px){' + hs.join(',') + '{background-image:url("data:image/svg+xml,' + encodeURIComponent(SVG.replace('__C__', stroke).replace('__B__', ESSAY[k][1])) + '"),' + caretUrl + ' !important}}\n';
+    }
     return out;
   }
   function apply(){
@@ -2701,6 +2717,140 @@ body.skin-dark .new-chat-detail-note-title { color:#fbbf24; }
   padding-top: 0 !important;
   padding-bottom: 0 !important;
 }
+/* ===== [UI 2026-10-21e] 申论/综应筛选栏外观统一（纯视觉；仍是「一行 5 个控件 + 独立统计行」，筛选逻辑零改动） ===== */
+/* ① 基础档（≤639px）：5 个控件一行，每格只剩 43~68px，图标与下拉箭头都放不下 ⇒ 纯文字居中 */
+body .essay-top-filter > select[id^="sl"],
+body.mobile-mode .essay-top-filter > select[id^="sl"],
+body.pc-mode .essay-top-filter > select[id^="sl"],
+body .essay-top-filter > select[id^="zy"],
+body.mobile-mode .essay-top-filter > select[id^="zy"],
+body.pc-mode .essay-top-filter > select[id^="zy"],
+body .essay-top-filter > button[id^="sl"],
+body.mobile-mode .essay-top-filter > button[id^="sl"],
+body.pc-mode .essay-top-filter > button[id^="sl"],
+body .essay-top-filter > button[id^="zy"],
+body.mobile-mode .essay-top-filter > button[id^="zy"],
+body.pc-mode .essay-top-filter > button[id^="zy"] {
+  height: 46px !important;
+  min-height: 46px !important;
+  max-height: 46px !important;
+  padding: 0 2px !important;
+  border: 1px solid #d8c3c7 !important;
+  border-radius: 8px !important;
+  background-color: #fff !important;
+  color: var(--deep) !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  line-height: 1 !important;
+  text-align: center !important;
+  text-align-last: center !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: clip !important;
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  box-shadow: none !important;
+}
+body .essay-top-filter > button[id$="ClearFilter"],
+body.mobile-mode .essay-top-filter > button[id$="ClearFilter"],
+body.pc-mode .essay-top-filter > button[id$="ClearFilter"] {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0 !important;
+}
+body .essay-top-filter > button[id$="ClearFilter"] .sf-clear-ico,body.mobile-mode .essay-top-filter > button[id$="ClearFilter"] .sf-clear-ico,body.pc-mode .essay-top-filter > button[id$="ClearFilter"] .sf-clear-ico { display: none !important; }
+
+/* ② ≥640px：格子 ≥130px，补齐与九宫格同款的左侧图标 + 右侧箭头（颜色由 #sfIconDyn 按当前主题注入） */
+@media (min-width: 640px) {
+  body .essay-top-filter > select[id^="sl"],
+body.mobile-mode .essay-top-filter > select[id^="sl"],
+body.pc-mode .essay-top-filter > select[id^="sl"],
+body .essay-top-filter > select[id^="zy"],
+body.mobile-mode .essay-top-filter > select[id^="zy"],
+body.pc-mode .essay-top-filter > select[id^="zy"],
+body .essay-top-filter > button[id^="sl"],
+body.mobile-mode .essay-top-filter > button[id^="sl"],
+body.pc-mode .essay-top-filter > button[id^="sl"],
+body .essay-top-filter > button[id^="zy"],
+body.mobile-mode .essay-top-filter > button[id^="zy"],
+body.pc-mode .essay-top-filter > button[id^="zy"] {
+    padding: 0 20px 0 26px !important;
+    background-repeat: no-repeat !important;
+    background-size: 15px 15px, 9px 9px !important;
+    background-position: 7px center, right 7px center !important;
+  }
+  body .essay-top-filter > button[id$="ClearFilter"],
+body.mobile-mode .essay-top-filter > button[id$="ClearFilter"],
+body.pc-mode .essay-top-filter > button[id$="ClearFilter"] { position: relative !important; padding: 0 22px 0 26px !important; }
+  body .essay-top-filter > button[id$="ClearFilter"] .sf-clear-ico,body.mobile-mode .essay-top-filter > button[id$="ClearFilter"] .sf-clear-ico,body.pc-mode .essay-top-filter > button[id$="ClearFilter"] .sf-clear-ico {
+    display: block !important;
+    position: absolute !important;
+    left: 7px !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+    width: 15px !important;
+    height: 15px !important;
+    flex: 0 0 15px !important;
+  }
+}
+
+/* ③ ≥769px：与九宫格格子完全同一档（高 52 / 字号 13 / 内边距 0 22 0 26） */
+@media (min-width: 769px) {
+  body .essay-top-filter > select[id^="sl"],
+body.mobile-mode .essay-top-filter > select[id^="sl"],
+body.pc-mode .essay-top-filter > select[id^="sl"],
+body .essay-top-filter > select[id^="zy"],
+body.mobile-mode .essay-top-filter > select[id^="zy"],
+body.pc-mode .essay-top-filter > select[id^="zy"],
+body .essay-top-filter > button[id^="sl"],
+body.mobile-mode .essay-top-filter > button[id^="sl"],
+body.pc-mode .essay-top-filter > button[id^="sl"],
+body .essay-top-filter > button[id^="zy"],
+body.mobile-mode .essay-top-filter > button[id^="zy"],
+body.pc-mode .essay-top-filter > button[id^="zy"] {
+    height: 52px !important;
+    min-height: 52px !important;
+    max-height: 52px !important;
+    font-size: 13px !important;
+    padding: 0 22px 0 26px !important;
+  }
+  body .essay-top-filter > button[id$="ClearFilter"],
+body.mobile-mode .essay-top-filter > button[id$="ClearFilter"],
+body.pc-mode .essay-top-filter > button[id$="ClearFilter"] {
+    height: 52px !important;
+    min-height: 52px !important;
+    max-height: 52px !important;
+    font-size: 13px !important;
+  }
+}
+
+/* ④ ≤340px：一行 5 格只剩 43px/格，字号降到 10px、内边距归零，保证四个汉字完整不截断 */
+@media (max-width: 340px) {
+  body .essay-top-filter > select[id^="sl"],
+body.mobile-mode .essay-top-filter > select[id^="sl"],
+body.pc-mode .essay-top-filter > select[id^="sl"],
+body .essay-top-filter > select[id^="zy"],
+body.mobile-mode .essay-top-filter > select[id^="zy"],
+body.pc-mode .essay-top-filter > select[id^="zy"],
+body .essay-top-filter > button[id^="sl"],
+body.mobile-mode .essay-top-filter > button[id^="sl"],
+body.pc-mode .essay-top-filter > button[id^="sl"],
+body .essay-top-filter > button[id^="zy"],
+body.mobile-mode .essay-top-filter > button[id^="zy"],
+body.pc-mode .essay-top-filter > button[id^="zy"] {
+    font-size: 10px !important;
+    padding: 0 !important;
+  }
+  body .essay-top-filter > button[id$="ClearFilter"],
+body.mobile-mode .essay-top-filter > button[id$="ClearFilter"],
+body.pc-mode .essay-top-filter > button[id$="ClearFilter"] {
+    min-width: 54px !important;
+    font-size: 10px !important;
+    padding: 0 !important;
+  }
+}
+
 /* ===== 新增：左侧抽屉菜单 ===== */
 #drawerMask { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 10001; display: none; opacity: 0; transition: opacity .3s ease; }
 #drawerMask.show { display: block; opacity: 1; }
@@ -8178,15 +8328,15 @@ function updateEssaySelects(){
   }
   bar.querySelectorAll('.essay-dynamic').forEach(function(element){ element.remove(); });
   var current={year:filterState.year,province:filterState.province,subType:filterState.subType,leafType:filterState.leafType};
-  bar.insertAdjacentHTML('beforeend',buildEssaySelect(p+'YearFilter','📅 全部年份',getEssayOptionStats('year'),function(a,b){ return Number(b)-Number(a); })+
-    buildEssaySelect(p+'ProvinceFilter','📍 全部省份',getEssayOptionStats('province'),function(a,b){
+  bar.insertAdjacentHTML('beforeend',buildEssaySelect(p+'YearFilter','全部年份',getEssayOptionStats('year'),function(a,b){ return Number(b)-Number(a); })+
+    buildEssaySelect(p+'ProvinceFilter','全部省份',getEssayOptionStats('province'),function(a,b){
       if(a==='国考'&&b!=='国考') return -1;
       if(b==='国考'&&a!=='国考') return 1;
       return String(a).localeCompare(String(b),'zh-CN');
     })+
-    buildEssaySelect(p+'TopicFilter','🏷️ 全部话题',getEssayOptionStats('subType'))+
-    buildEssaySelect(p+'LeafFilter','📋 全部题型',getEssayOptionStats('leafType'))+
-    '<button class="essay-dynamic" id="'+p+'ClearFilter" type="button">✕ 清除筛选</button>'+
+    buildEssaySelect(p+'TopicFilter','全部话题',getEssayOptionStats('subType'))+
+    buildEssaySelect(p+'LeafFilter','全部题型',getEssayOptionStats('leafType'))+
+    '<button class="essay-dynamic" id="'+p+'ClearFilter" type="button"><svg class="sf-clear-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7.8"/><path d="M9.4 9.4l5.2 5.2M14.6 9.4l-5.2 5.2"/></svg><span>清除筛选</span></button>'+
     '<div class="essay-dynamic essay-filter-stats">共 '+getEssayQuestions().length+' 题 · 筛选后 '+getFiltered().length+' 题</div>');
   bar.className='filter-bar essay-top-filter';
   ['year','province','subType','leafType'].forEach(function(field){
