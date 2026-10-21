@@ -12862,6 +12862,7 @@ async function importBackupFromObject(data){
     // 第六步：恢复 AI 对话记录（用 qid 匹配并合并去重）
     let chatRestored = 0;
     let simplifyRestored = 0;        // [AI 2026-10-22] 单独统计「AI 简化解析」恢复条数
+    let simplifyKept = 0;            // [AI 2026-10-22b] 独立库里已存在、按真源优先跳过的条数
     const simplifyByKey = {};        // key → [simplify 消息]（待补写进 aiChatHistoryDB）
     if (data.chatHistory && typeof data.chatHistory === 'object') {
       try {
@@ -12901,6 +12902,14 @@ async function importBackupFromObject(data){
           if (!newChats[key]) newChats[key] = [];
           messages.forEach(function(msg) {
             if (!msg || typeof msg !== 'object') return;
+            // [AI 2026-10-22b] 简化解析的收集**必须放在 exists 判断之外**！
+            //   旧版导入只写镜像(CHAT_DB_KEY)，镜像里早已有这些消息 ⇒ exists 恒为 true；
+            //   若把收集塞进 if(!exists) 里，就变成「镜像有、独立库没有」时永远补不进去
+            //   （用户实测弹窗「恢复AI简化解析 0 条」正是这个 bug）。幂等由后段 same/已有判断兜。
+            if (msg.type === 'simplify' && msg.content) {
+              if (!simplifyByKey[key]) simplifyByKey[key] = [];
+              simplifyByKey[key].push(msg);
+            }
             const exists = newChats[key].some(function(existing) {
               return existing && typeof existing === 'object' &&
                 (existing.role || '') === (msg.role || '') &&
@@ -12910,11 +12919,6 @@ async function importBackupFromObject(data){
             if (!exists) {
               newChats[key].push(msg);
               chatRestored++;
-              // 收集简化解析，稍后补写进 AI 历史库（那是行内「AI 简化解析」的唯一读取源）
-              if (msg.type === 'simplify' && msg.content) {
-                if (!simplifyByKey[key]) simplifyByKey[key] = [];
-                simplifyByKey[key].push(msg);
-              }
             }
           });
         });
@@ -12940,7 +12944,12 @@ async function importBackupFromObject(data){
               const same = current.some(function(m){
                 return m && m.type === 'simplify' && String(m.content || '') === String(incoming.content || '');
               });
-              if (same) continue;   // 已恢复过，刷新页面重复导入也不会重复写
+              // [AI 2026-10-22b] 独立库是**真源**：只要它已经有简化解析文本，就不拿备份里的旧文本覆盖；
+              //   只在独立库确实缺这条时才补写（「镜像有、独立库空」该走的就是这条路）。
+              const hasAny = current.some(function(m){
+                return m && m.type === 'simplify' && String(m.content || '').trim();
+              });
+              if (same || hasAny) { simplifyKept++; continue; }
               const kept = current.filter(function(m){ return !(m && m.type === 'simplify'); });
               const merged = kept.concat([incoming]);
               const ok = await new Promise(function(resolve){
@@ -13097,7 +13106,7 @@ async function importBackupFromObject(data){
     renderAll();
     
     // 显示恢复结果
-    let resultMsg = `✅ 恢复完成！\n匹配成功 ${matchedCount} 题，跳过 ${skippedCount} 题（未找到对应题目）\n恢复错题集 ${wrongSetRestored} 题；恢复收藏 ${favoritesRestored} 题；恢复做题次数 ${attemptsRestored} 题；恢复AI对话 ${chatRestored} 条；恢复AI简化解析 ${simplifyRestored} 条；恢复心得 ${notesRestored} 条；恢复申论笔记 ${essayNotesRestored} 条`;
+    let resultMsg = `✅ 恢复完成！\n匹配成功 ${matchedCount} 题，跳过 ${skippedCount} 题（未找到对应题目）\n恢复错题集 ${wrongSetRestored} 题；恢复收藏 ${favoritesRestored} 题；恢复做题次数 ${attemptsRestored} 题；恢复AI对话 ${chatRestored} 条；恢复AI简化解析 ${simplifyRestored} 条${simplifyKept ? '（另有 ' + simplifyKept + ' 条独立库已存在，未覆盖）' : ''}；恢复心得 ${notesRestored} 条；恢复申论笔记 ${essayNotesRestored} 条`;
     if (notesSkipped > 0) resultMsg += `\n（${notesSkipped} 条心得因题目未找到已跳过）`;
     if(answerTimeRestoreFailed) resultMsg += '\n作答时间戳写入失败，其他做题记录已恢复';
     alert(resultMsg);
