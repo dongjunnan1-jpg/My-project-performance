@@ -14497,9 +14497,14 @@ const AI_TYPE_STRATEGIES = {
 };
 // 按服务商分档 max_tokens：抑制免费模型超字数
 // 300 中文字 ≈ 400-600 token；免费模型给较紧上限
+// [AI 2026-10-21g] zhipu 思考档从 4000 提到 8000：
+// GLM-4.5/4.6 的 reasoning_content 与正文**共享** max_tokens，实测开思考时
+// 4000 里能挤给正文的只剩二三百 token，解析写到 ①② 就 finish_reason=length。
+// 老模型（glm-4-flash 上限 4095）若因此 400，由 simplifySolution 里的
+// 「max_tokens 超限自愈」自动降档，不会把可用模型弄挂。
 const MAX_TOKENS_BY_PROVIDER = {
   deepseek:    { normal: 2000, thinking: 4000 },
-  zhipu:       { normal: 700,  thinking: 4000 },
+  zhipu:       { normal: 1200, thinking: 8000 },
   openrouter:  { normal: 700,  thinking: 4000 },
   qwen:        { normal: 800,  thinking: 4000 },
   siliconflow: { normal: 800,  thinking: 4000 },
@@ -14653,10 +14658,12 @@ async function simplifySolution(key, btn){
   const MAX_RETRY=3;
   let lastError=null;
   let thinkParamsStripped=false;   // 自愈标记：剔除过一次就不再重复剔除
+  let mtLowered=false;             // 自愈标记：max_tokens 超模型上限降过档就不再降
 
   for(let attempt=0; attempt<=MAX_RETRY; attempt++){
     let fullText='';
     let reasoningText='';
+    let finishReason='';
     if(streamTarget) streamTarget.textContent='';
 
     try{
@@ -14679,6 +14686,15 @@ async function simplifySolution(key, btn){
           body.model = ep.model;
           attempt--;
           throw new Error('模型代码已失效，已自动切换到 '+ep.model);
+        }
+        // [AI 2026-10-21g] max_tokens 超模型上限自愈：
+        // 思考档提到 8000 后，glm-4-flash（上限 4095）这类老模型会直接 400/参数错误，
+        // 降回 4000 重试一次（不吃重试次数）。判定必须带 max_tokens 特征，避免误伤思考参数 400。
+        if(!mtLowered && (resp.status === 400 || resp.status === 422) && /max[_\s]?tokens|max_tokens|上限|超出范围|1210/i.test(errText)){
+          mtLowered = true;
+          body.max_tokens = 4000;
+          attempt--;
+          throw new Error('max_tokens 超出该模型上限，已自动降档重试');
         }
         // 思考参数自愈：老模型 / 不支持该字段的模型会直接 400（未知参数），
         // 剔除思考参数后重试一次（不吃掉重试次数），避免"开思考"把本来能用的模型变不可用。
@@ -14709,7 +14725,10 @@ async function simplifySolution(key, btn){
           if(payload==='[DONE]') continue;
           try{
             const json=JSON.parse(payload);
-            const delta=json.choices && json.choices[0] && json.choices[0].delta;
+            const choice=json.choices && json.choices[0];
+            // [AI 2026-10-21g] 记录结束原因：'length' = 撞上 max_tokens 被硬截断
+            if(choice && choice.finish_reason) finishReason=String(choice.finish_reason);
+            const delta=choice && choice.delta;
             if(delta){
               if(delta.reasoning_content){
                 reasoningText+=delta.reasoning_content;
@@ -14724,6 +14743,65 @@ async function simplifySolution(key, btn){
         }
       }
       clearTimeout(timeoutId);
+
+      // [AI 2026-10-21g] 截断自动续写（治 GLM/Qwen 开思考后正文只出半句）：
+      // 1) 思考 token 与正文共享 max_tokens，模型把额度花在 reasoning_content 上时，
+      //    正文会在半句话处 finish_reason=length，旧实现当成功直接落库 → 用户看到半截；
+      // 2) 这里检测到 length 就续写，续写请求强制关闭思考（额度全给正文），最多 2 轮；
+      // 3) 仍截断才在末尾明确提示，不再静默交付残缺解析。
+      let contRounds=0;
+      while(finishReason==='length' && contRounds<2 && (fullText || reasoningText)){
+        contRounds++;
+        finishReason='';
+        const contBody=Object.assign({}, body, buildThinkingParams(aiConfig.provider, false), {
+          // 正文挤出过半句 → 带 assistant 前缀接着写；正文一个字都没出来（思考吃光额度）
+          // → 不带前缀、关思考整段重跑，避免把 reasoning_content 当成解析显示给用户。
+          messages: fullText ? body.messages.concat([
+            {role:'assistant', content: fullText},
+            {role:'user', content: '继续。紧接着上面最后一个字往下写，不要重复已写内容，不要重新开头，不要加任何说明、总结或收尾语。'}
+          ]) : body.messages.slice(),
+          max_tokens: maxTok,
+          stream: true
+        });
+        // 再兜一遍：确保续写请求真的不带思考（各家字段名不同，统一关死）
+        if(contBody.thinking) contBody.thinking={type:'disabled'};
+        if('reasoning_effort' in contBody) contBody.reasoning_effort='none';
+        if('reasoning' in contBody) contBody.reasoning={effort:'none'};
+        if('enable_thinking' in contBody) contBody.enable_thinking=false;
+        try{
+          const cResp=await fetch(ep.url,{method:'POST',headers:aiAuthHeaders(),body:JSON.stringify(contBody)});
+          if(!cResp.ok || !cResp.body) break;
+          const cReader=cResp.body.getReader();
+          const cDecoder=new TextDecoder('utf-8');
+          let cBuf='';
+          while(true){
+            const {done:cDone, value:cVal}=await cReader.read();
+            if(cDone) break;
+            cBuf+=cDecoder.decode(cVal,{stream:true});
+            const cLines=cBuf.split('\n'); cBuf=cLines.pop();
+            for(const cLine of cLines){
+              const cTrim=cLine.trim();
+              if(!cTrim || !cTrim.startsWith('data:')) continue;
+              const cPayload=cTrim.slice(5).trim();
+              if(cPayload==='[DONE]') continue;
+              try{
+                const cJson=JSON.parse(cPayload);
+                const cChoice=cJson.choices && cJson.choices[0];
+                if(cChoice && cChoice.finish_reason) finishReason=String(cChoice.finish_reason);
+                const cDelta=cChoice && cChoice.delta;
+                if(cDelta && cDelta.content){
+                  fullText+=cDelta.content;
+                  if(streamTarget) streamTarget.textContent=fullText;
+                  result.scrollTop=result.scrollHeight;
+                }
+              }catch(e){}
+            }
+          }
+        }catch(e){ break; }
+      }
+      if(finishReason==='length'){
+        fullText+='\n\n⚠️ 输出已达模型单次长度上限，以上内容可能未写完；再次点击「AI 简化解析」可重试。';
+      }
 
       if(!fullText && reasoningText) fullText=reasoningText;
       if(!fullText) throw new Error('返回内容为空');
