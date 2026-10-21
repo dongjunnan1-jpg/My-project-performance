@@ -7159,6 +7159,24 @@ function handleFiles(fileListArr){
               }
           });
 
+          // [CMT 2026-10-22] 补写 hasComment 标记（写进库，导出备份 / 重导一起带上）
+          //   iCloud「题库 有评论」整批：评论已并进 solution 尾部、带 cmtTotal，
+          //   但没有 hasComment 布尔 ⇒ 不补的话 💬 徽章与「只显示有评论」筛选永远失效。
+          //   判据与视图记录兜底保持一致：cmtTotal>0 或 solution 里有「考生讨论」锚点。
+          questions.forEach(function(q) {
+            if(!q || typeof q !== 'object' || q._essay) return;
+            if(q.hasComment === true) return;
+            var total = Number(q.cmtTotal);
+            var anchored = commentSectionOf(q.solution) !== '';
+            if((isFinite(total) && total > 0) || anchored){
+              q.hasComment = true;
+              if(!(isFinite(total) && total > 0)){
+                var n = cmtTotalOfSolution(q.solution);
+                if(n > 0) q.cmtTotal = n;
+              }
+            }
+          });
+
           // ============================================================
           // ★ 题级去重（2026-09-23）：同一道题在本分区内只保留一份
           //   判据是「题目身份键」= _qid + 材料指纹（见 questionIdentityKey），
@@ -7635,12 +7653,19 @@ function prepareQuestion(zone, f, q, qi){
   p._qi = qi;
   p._key = key;
   p._zone = zone;
-  // [20261020] 含评论标记：分类模块已把「考生讨论」并进 solution，这里只读合并脚本写入的
-  // hasComment / cmtTotal（都是标量，能进视图记录）。此版本 solution 不进记录，
-  // 所以**不能**回退去扫 solution 里的锚点 —— 老文件（只有评论区没有 hasComment 的）
-  // 需要先用 merge_comments_into_mirror.py 过一遍才有标记。
-  p._hasComment = q.hasComment === true;
-  p._cmtTotal = (typeof q.cmtTotal === 'number') ? q.cmtTotal : 0;
+  // [20261020] 含评论标记：分类模块已把「考生讨论」并进 solution，标量 hasComment / cmtTotal
+  //   能进视图记录，所以优先读它们。
+  // [CMT 2026-10-22] 兜底（补齐 20261020 的缺口）：iCloud「题库 有评论」整批只把「考生讨论」
+  //   并进 solution 尾部、只带 cmtTotal，**没有 hasComment 布尔** ⇒ 只认 hasComment 会让
+  //   💬 徽章和「只显示有评论」全失效（用户实测导入后筛出 0 题）。
+  //   实测依据：总库无 cmtTotal 字段（0/61288 误判风险），分类模块 cmtTotal>0 与含评论段
+  //   完全吻合（68018 vs 68019），所以用 cmtTotal>0 兜底不会把无评论题误标。
+  //   构建期原始题对象 q 就在手上（正文可能是壳 ⇒ solution 扫描放最后、失败也无害）。
+  p._hasComment = q.hasComment === true
+    || (typeof q.cmtTotal === 'number' && q.cmtTotal > 0)
+    || (typeof q.solution === 'string' && q.solution.indexOf('考生讨论') >= 0);
+  p._cmtTotal = (typeof q.cmtTotal === 'number' && q.cmtTotal > 0) ? q.cmtTotal
+              : (p._hasComment ? cmtTotalOfSolution(q.solution) : 0);
   p._answered = (f.answered && f.answered[key]!==undefined) ? f.answered[key] : undefined;
   p._view = 1;                                          // 视图记录标记
   p._viewBound = 0;                                     // 0 = 正文未挂载；1 = 已挂载
