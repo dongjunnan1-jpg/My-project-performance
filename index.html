@@ -12712,12 +12712,68 @@ async function exportBackup(){
     ZONE_IDS.forEach(function(z){ releaseZoneBodies(z); });
   });
 }
+// ===== 导入进度遮罩 [UI 2026-10-22] =====
+// 为什么要有它（两个独立问题，一个方案同时解决）：
+//   ① 用户看不到任何反馈，几千题的备份导入要几秒，以为程序死了；
+//   ② 导入期间题目区会「突然半片空白」，结束时才恢复。原因是导入**全程不碰 DOM**
+//      （唯一的重渲染是末尾 renderAll），而准备阶段 KeepBodies 把 6 个分区正文一次性
+//      读进内存、再叠加整个备份对象与全库 qid 映射 ⇒ iOS Safari 内存压力下丢弃合成层
+//      tile，同时主线程被 IDB 回调占满、长时间不 paint，画面就停在半张卡片上。
+//      遮罩盖住这段中间态 + 每阶段让出主线程重绘，用户只看到平滑进度。
+var _ipMask=null, _ipBar=null, _ipPct=null, _ipText=null;
+function setImportProgress(pct, text){
+  if(!_ipMask) return;
+  var p=Math.max(0, Math.min(100, Math.round(pct||0)));
+  if(_ipBar) _ipBar.style.width=p+'%';
+  if(_ipPct) _ipPct.textContent=p+'%';
+  if(text && _ipText) _ipText.textContent=text;
+}
+function showImportProgress(text, pct){
+  if(_ipMask){ setImportProgress(pct===undefined?0:pct, text); return; }
+  var m=document.createElement('div');
+  m.id='importProgressMask';
+  m.style.cssText='position:fixed;left:0;top:0;right:0;bottom:0;z-index:100000;'
+    +'background:rgba(20,24,33,.55);display:flex;align-items:center;justify-content:center;padding:24px;';
+  m.innerHTML='<div style="width:min(330px,88vw);background:#fff;border-radius:14px;padding:20px;box-shadow:0 12px 40px rgba(0,0,0,.3);">'
+    +'<div style="font-size:15px;font-weight:600;color:#1f2430;margin-bottom:3px;">正在导入做题备份</div>'
+    +'<div style="font-size:12px;color:#9aa1ab;margin-bottom:14px;">请不要关闭页面</div>'
+    +'<div style="height:8px;background:#e8ebf0;border-radius:99px;overflow:hidden;">'
+    +'<div class="ip-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#4a8cf7,#2f6fe0);transition:width .3s ease;"></div></div>'
+    +'<div style="display:flex;justify-content:space-between;margin-top:10px;font-size:12px;color:#6b7280;">'
+    +'<span class="ip-text">准备中…</span><span class="ip-pct">0%</span></div></div>';
+  document.body.appendChild(m);
+  _ipMask=m;
+  _ipBar=m.querySelector('.ip-bar');
+  _ipPct=m.querySelector('.ip-pct');
+  _ipText=m.querySelector('.ip-text');
+  setImportProgress(pct===undefined?0:pct, text);
+}
+function hideImportProgress(){
+  var m=_ipMask;
+  _ipMask=null; _ipBar=null; _ipPct=null; _ipText=null;
+  if(m && m.parentNode) m.parentNode.removeChild(m);
+}
+// 让浏览器把上一帧真正画出来：纯 await IDB 的连跑会让主线程一直不空闲，
+// 进度条会「卡在 0% 直到结束」，所以每个阶段之间都让出一次。
+function importProgressYield(){
+  return new Promise(function(resolve){
+    if(typeof requestAnimationFrame!=='function'){ setTimeout(resolve, 16); return; }
+    requestAnimationFrame(function(){ setTimeout(resolve, 0); });
+  });
+}
 function importBackup(input){
   const file=input.files[0]; if(!file) return;
   const reader=new FileReader();
   reader.onload=function(e){
-    try{ const data=JSON.parse(e.target.result); importBackupFromObject(data); }
-    catch(err){ alert('导入失败：'+err.message); }
+    try{
+      const data=JSON.parse(e.target.result);
+      // 导入是 async：没有 catch 的话，中途抛错会把遮罩永久留在屏幕上
+      var p=importBackupFromObject(data);
+      if(p && typeof p.catch==='function'){
+        p.catch(function(err){ hideImportProgress(); alert('导入失败：'+err.message); });
+      }
+    }
+    catch(err){ hideImportProgress(); alert('导入失败：'+err.message); }
     input.value='';
   };
   reader.readAsText(file);
@@ -12731,16 +12787,25 @@ async function importBackupFromObject(data){
   
   // ========== 新版 v2 格式导入（做题记录匹配模式）==========
   if(data._type === 'helium_quiz_backup_v2' && data.version === 2 && data.data){
-    alert('检测到新版做题备份格式，正在恢复...');
+    // [UI 2026-10-22] 原来的 alert('检测到新版做题备份格式…') 换成进度遮罩：
+    //   alert 会同步阻塞合成器，iOS 上更容易把「半片空白」的中间帧留在屏幕上。
+    showImportProgress('正在准备题库…', 2);
+    await importProgressYield();
     // C2-B：v2 恢复靠「全库逐题扫 qid 建映射」来匹配备份里的做题记录。
     //   按需正文下轻量壳没有 questions ⇒ 映射为空 ⇒ 一道题都匹配不上（静默丢失全部进度）。
     //   这里先把所有分区正文补齐；本函数其余逻辑与改造前完全一致。
     for(let _iz=0; _iz<ZONE_IDS.length; _iz++){
       const z = ZONE_IDS[_iz];
+      setImportProgress(2 + Math.round(_iz / ZONE_IDS.length * 40),
+        '正在加载题库正文（' + (_iz + 1) + '/' + ZONE_IDS.length + '）…');
+      await importProgressYield();
       if(!zoneViewReady(z)) await ensureZoneView(z, { keepBodies: true });
       if(!zoneBodiesAllLoaded(z)) await ensureFilesLoaded(z);
+      await importProgressYield();
     }
     
+    setImportProgress(44, '正在建立题目索引…');
+    await importProgressYield();
     // 第一步：扫描当前数据库，建立 qid → {zone, fileId, qi} 的映射
     const qidMap = {};  // qid → {zone, fileId, qi}
     const keyMap = {};  // key → {zone, fileId, qi}（用于导入时更新答案）
@@ -12763,6 +12828,8 @@ async function importBackupFromObject(data){
       });
     });
     
+    setImportProgress(56, '正在恢复做题记录…');
+    await importProgressYield();
     // 第二步：遍历备份数据，用 qid 匹配并恢复做题记录
     let matchedCount = 0, skippedCount = 0;
     const backupData = data.data || {};
@@ -12806,6 +12873,8 @@ async function importBackupFromObject(data){
     });
     markAnswersDirty();   // 进度恢复直接改了 f.answered（此路径不落盘），必须让快照重算 _answered
     
+    setImportProgress(78, '正在恢复错题集…');
+    await importProgressYield();
     // 第三步：恢复错题集标记（用 qid 匹配），写入 IndexedDB 的 wrongSet
     let wrongSetRestored = 0;
     if (data.wrongSet) {
@@ -12823,6 +12892,8 @@ async function importBackupFromObject(data){
       saveWrong();   // 确保写入 IndexedDB
     }
     
+    setImportProgress(82, '正在恢复收藏…');
+    await importProgressYield();
     // 第四步：恢复收藏标记（用 qid 匹配）
     let favoritesRestored = 0;
     if (data.favorites) {
@@ -12840,6 +12911,8 @@ async function importBackupFromObject(data){
       saveFav();   // 确保写入 IndexedDB
     }
     
+    setImportProgress(86, '正在恢复做题次数…');
+    await importProgressYield();
     // 第五步：恢复做题次数（用 qid 匹配）
     let attemptsRestored = 0;
     const attemptKey = 'qz_question_attempts_v1';
@@ -12859,6 +12932,8 @@ async function importBackupFromObject(data){
       localStorage.setItem(attemptKey, JSON.stringify(attempts));
     } catch (e) {}
 
+    setImportProgress(89, '正在恢复 AI 对话与简化解析…');
+    await importProgressYield();
     // 第六步：恢复 AI 对话记录（用 qid 匹配并合并去重）
     let chatRestored = 0;
     let simplifyRestored = 0;        // [AI 2026-10-22] 单独统计「AI 简化解析」恢复条数
@@ -12935,6 +13010,8 @@ async function importBackupFromObject(data){
             const d = await openAIHistoryDb();
             for (let si = 0; si < simpKeys.length; si++) {
               const sk = simpKeys[si];
+              if (si % 100 === 0) setImportProgress(89 + Math.round(si / simpKeys.length * 5),
+                '正在恢复 AI 简化解析（' + si + '/' + simpKeys.length + '）…');
               const incoming = simplifyByKey[sk][simplifyByKey[sk].length - 1];
               const current = await new Promise(function(resolve){
                 const rq = d.transaction(AI_HISTORY_STORE, 'readonly').objectStore(AI_HISTORY_STORE).get(sk);
@@ -12969,6 +13046,8 @@ async function importBackupFromObject(data){
       }
     }
     
+    setImportProgress(95, '正在恢复题目心得…');
+    await importProgressYield();
     // 第六步之二：恢复题目心得（多条，合并去重）
     let notesRestored = 0, notesSkipped = 0;
     if (data.questionNotes && typeof data.questionNotes === 'object') {
@@ -13065,6 +13144,8 @@ async function importBackupFromObject(data){
       }
     }
     
+    setImportProgress(97, '正在恢复申论笔记…');
+    await importProgressYield();
     // 第六步之三：恢复申论笔记
     let essayNotesRestored = 0;
     if (data.essayNotes && typeof data.essayNotes === 'object') {
@@ -13090,6 +13171,8 @@ async function importBackupFromObject(data){
       }
     }
     
+    setImportProgress(99, '正在写回并刷新界面…');
+    await importProgressYield();
     // 第七步：保存恢复结果
     ZONE_IDS.forEach(function(z){
       (index[z] || []).forEach(function(m){ saveFile(z, m.id); });
@@ -13104,7 +13187,13 @@ async function importBackupFromObject(data){
     currentPage = 1;
     saveView();
     renderAll();
-    
+
+    // 进度收尾：先让 100% 真正画出来，再撤遮罩 —— 否则「撤遮罩的瞬间」正好是
+    //   renderAll 刚结束、还没出帧的一刻，又会出现半片空白（和导入开始时同一个坑）。
+    setImportProgress(100, '完成');
+    await importProgressYield();
+    hideImportProgress();
+
     // 显示恢复结果
     let resultMsg = `✅ 恢复完成！\n匹配成功 ${matchedCount} 题，跳过 ${skippedCount} 题（未找到对应题目）\n恢复错题集 ${wrongSetRestored} 题；恢复收藏 ${favoritesRestored} 题；恢复做题次数 ${attemptsRestored} 题；恢复AI对话 ${chatRestored} 条；恢复AI简化解析 ${simplifyRestored} 条${simplifyKept ? '（另有 ' + simplifyKept + ' 条独立库已存在，未覆盖）' : ''}；恢复心得 ${notesRestored} 条；恢复申论笔记 ${essayNotesRestored} 条`;
     if (notesSkipped > 0) resultMsg += `\n（${notesSkipped} 条心得因题目未找到已跳过）`;
