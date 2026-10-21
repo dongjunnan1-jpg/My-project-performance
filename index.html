@@ -716,8 +716,10 @@ body.skin-dark .sf-group-title { color: var(--text-muted, #a0aec0); }
     font-size: 14px !important;
   }
 }
-.ratio-label { font-size: 13px; color:var(--text-muted); display:flex; align-items:center; gap:4px; white-space:nowrap; }
-.ratio-input { width: 58px; padding: 7px 8px; }
+/* [FIX 20261021] 容器由 label 改为 div：点击「正确率」文字 / ~ / % / 两侧空白不再聚焦输入框，只有 input 本身可点 */
+.ratio-label { font-size: 13px; color:var(--text-muted); display:flex; align-items:center; gap:4px; white-space:nowrap; cursor:default; }
+.ratio-label-text, .ratio-sep, .ratio-unit { cursor: default; user-select: none; }
+.ratio-input { width: 58px; padding: 7px 8px; cursor: text; }
 .btn { padding: 8px 16px; border: none; border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: bold; -webkit-tap-highlight-color: transparent; touch-action: manipulation; transition: all .18s ease; box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
 .btn-primary { background: linear-gradient(135deg, var(--grad-a), var(--grad-b)); color: var(--on-main); }
 .btn-primary:hover { background: var(--deep); color: #fff; transform: translateY(-1px) scale(1.03); box-shadow: 0 4px 14px rgba(74,144,217,0.35); }
@@ -2873,10 +2875,14 @@ body.skin-dark .en-pagination button.active {
                 <div class="sf-opt" data-group="range" data-value="range81_100" role="option">正确率 81-100%</div>
             </div>
         </div> <select id="moduleFilter"><option value="all">📂 全部模块</option></select> <select id="subTypeFilter"><option value="all">🏷️ 全部话题</option></select> <select id="leafTypeFilter"><option value="all">📋 全部细分题型</option></select> <button class="btn btn-outline" onclick="clearFilters()">✕ 清除筛选</button>
-        <label class="ratio-label">正确率
-            <input type="number" id="minRatioInput" min="0" max="100" placeholder="0" class="ratio-input"> ~
-            <input type="number" id="maxRatioInput" min="0" max="100" placeholder="100" class="ratio-input">%
-        </label>
+        <!-- [FIX 20261021] 原为 <label>：label 的隐式激活会把整行（「正确率」文字、~、% 及两侧空白）都变成点击热区，
+             点空白也会聚焦到 #minRatioInput。改为 <div> 后只有精确点击 input 本身才进入输入，空白不响应。 -->
+        <div class="ratio-label"><span class="ratio-label-text">正确率</span>
+            <input type="number" id="minRatioInput" min="0" max="100" placeholder="0" class="ratio-input" aria-label="正确率下限">
+            <span class="ratio-sep">~</span>
+            <input type="number" id="maxRatioInput" min="0" max="100" placeholder="100" class="ratio-input" aria-label="正确率上限">
+            <span class="ratio-unit">%</span>
+        </div>
     </div>
 
     <!-- 控制栏 -->
