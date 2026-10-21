@@ -12551,6 +12551,36 @@ async function exportBackup(){
     console.warn('导出对话记录失败:', e);
     chatHistory = {};
   }
+
+  // [AI 2026-10-22] AI 简化解析的**真源**是独立库 aiChatHistoryDB（saveAIHistoryMessage 写入），
+  //   CHAT_DB_KEY(qz_ai_chats) 只是它的镜像。镜像可能缺条目（老版本导出的存档、清空过对话、
+  //   镜像写失败），只导镜像会让备份里没有简化解析 ⇒ 导入后看不到任何「🤖 AI 简化解析」。
+  //   这里把 AI 历史库里所有 simplify 消息合并进备份的 chatHistory（按 key 归位，内容去重）。
+  try {
+    const aiKeys = await new Promise(function(resolve){
+      openAIHistoryDb().then(function(d){
+        const rq = d.transaction(AI_HISTORY_STORE, 'readonly').objectStore(AI_HISTORY_STORE).getAllKeys();
+        rq.onsuccess = function(){ resolve(Array.isArray(rq.result) ? rq.result : []); };
+        rq.onerror = function(){ resolve([]); };
+      }).catch(function(){ resolve([]); });
+    });
+    for (let ai = 0; ai < aiKeys.length; ai++) {
+      const aiKey = aiKeys[ai];
+      if (!aiKey) continue;
+      const hist = await getAIHistory(aiKey);
+      const simps = hist.filter(function(m){ return m && m.type === 'simplify' && m.content; });
+      if (!simps.length) continue;
+      const arr = chatHistory[aiKey] || (chatHistory[aiKey] = []);
+      simps.forEach(function(m){
+        const exists = arr.some(function(x){
+          return x && x.type === 'simplify' && String(x.content || '') === String(m.content || '');
+        });
+        if (!exists) arr.push(m);
+      });
+    }
+  } catch (e) {
+    console.warn('合并AI简化解析到备份失败:', e);
+  }
   
   ZONE_IDS.forEach(zone => {
     // 构建 qid 到 key 的映射
@@ -12831,6 +12861,8 @@ async function importBackupFromObject(data){
 
     // 第六步：恢复 AI 对话记录（用 qid 匹配并合并去重）
     let chatRestored = 0;
+    let simplifyRestored = 0;        // [AI 2026-10-22] 单独统计「AI 简化解析」恢复条数
+    const simplifyByKey = {};        // key → [simplify 消息]（待补写进 aiChatHistoryDB）
     if (data.chatHistory && typeof data.chatHistory === 'object') {
       try {
         const existingChats = await loadAllChats();
@@ -12845,6 +12877,12 @@ async function importBackupFromObject(data){
             }, null);
           }, null);
           let match = qidMap[qid];
+          // [AI 2026-10-22] 备份里 chatHistory 的键其实是**题目 key**（f<fileId>_q<n>，见 exportBackup），
+          //   不是 qid。先用 keyMap 做一次精确命中，避免退化成 findQuestionByContent 的全文扫描。
+          if(!match && keyMap[qid]){
+            const km = keyMap[qid];
+            match = { zone: km.zone, fileId: km.fileId, qi: km.qi, key: qid };
+          }
           if(!match){
             const keyMessage = messages.find(function(message){ return message && message.questionKey; });
             if(keyMessage){
@@ -12872,10 +12910,51 @@ async function importBackupFromObject(data){
             if (!exists) {
               newChats[key].push(msg);
               chatRestored++;
+              // 收集简化解析，稍后补写进 AI 历史库（那是行内「AI 简化解析」的唯一读取源）
+              if (msg.type === 'simplify' && msg.content) {
+                if (!simplifyByKey[key]) simplifyByKey[key] = [];
+                simplifyByKey[key].push(msg);
+              }
             }
           });
         });
         await idbSet(CHAT_DB_KEY, newChats);
+
+        // [AI 2026-10-22] 行内「🤖 AI 简化解析」只从**独立库** aiChatHistoryDB 读
+        //   （renderQuestions → restoreAIHistoryForVisibleQuestions → getAIHistory）。
+        //   以前导入只写 CHAT_DB_KEY，所以导入备份后所有历史简化解析都看不到（用户报的正是这个）。
+        //   语义与 saveAIHistoryMessage 保持一致：同一个 key 只保留**最新一条** simplify，
+        //   非 simplify 消息（答疑/心得）原样保留。
+        const simpKeys = Object.keys(simplifyByKey);
+        if (simpKeys.length) {
+          try {
+            const d = await openAIHistoryDb();
+            for (let si = 0; si < simpKeys.length; si++) {
+              const sk = simpKeys[si];
+              const incoming = simplifyByKey[sk][simplifyByKey[sk].length - 1];
+              const current = await new Promise(function(resolve){
+                const rq = d.transaction(AI_HISTORY_STORE, 'readonly').objectStore(AI_HISTORY_STORE).get(sk);
+                rq.onsuccess = function(){ resolve(Array.isArray(rq.result) ? rq.result : []); };
+                rq.onerror = function(){ resolve([]); };
+              });
+              const same = current.some(function(m){
+                return m && m.type === 'simplify' && String(m.content || '') === String(incoming.content || '');
+              });
+              if (same) continue;   // 已恢复过，刷新页面重复导入也不会重复写
+              const kept = current.filter(function(m){ return !(m && m.type === 'simplify'); });
+              const merged = kept.concat([incoming]);
+              const ok = await new Promise(function(resolve){
+                const tx = d.transaction(AI_HISTORY_STORE, 'readwrite');
+                tx.objectStore(AI_HISTORY_STORE).put(merged, sk);
+                tx.oncomplete = function(){ resolve(true); };
+                tx.onerror = function(){ resolve(false); };
+              });
+              if (ok) simplifyRestored++;
+            }
+          } catch (e) {
+            console.warn('恢复AI简化解析失败:', e);
+          }
+        }
       } catch (e) {
         console.warn('恢复对话记录失败:', e);
       }
@@ -13018,7 +13097,7 @@ async function importBackupFromObject(data){
     renderAll();
     
     // 显示恢复结果
-    let resultMsg = `✅ 恢复完成！\n匹配成功 ${matchedCount} 题，跳过 ${skippedCount} 题（未找到对应题目）\n恢复错题集 ${wrongSetRestored} 题；恢复收藏 ${favoritesRestored} 题；恢复做题次数 ${attemptsRestored} 题；恢复AI对话 ${chatRestored} 条；恢复心得 ${notesRestored} 条；恢复申论笔记 ${essayNotesRestored} 条`;
+    let resultMsg = `✅ 恢复完成！\n匹配成功 ${matchedCount} 题，跳过 ${skippedCount} 题（未找到对应题目）\n恢复错题集 ${wrongSetRestored} 题；恢复收藏 ${favoritesRestored} 题；恢复做题次数 ${attemptsRestored} 题；恢复AI对话 ${chatRestored} 条；恢复AI简化解析 ${simplifyRestored} 条；恢复心得 ${notesRestored} 条；恢复申论笔记 ${essayNotesRestored} 条`;
     if (notesSkipped > 0) resultMsg += `\n（${notesSkipped} 条心得因题目未找到已跳过）`;
     if(answerTimeRestoreFailed) resultMsg += '\n作答时间戳写入失败，其他做题记录已恢复';
     alert(resultMsg);
