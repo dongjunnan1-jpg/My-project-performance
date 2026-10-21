@@ -228,18 +228,11 @@
     gap: 4px !important;
     padding: 0 8px !important;
 }
-.upload-zone select,
-.upload-zone button {
-    flex: 0 0 80px !important;
-    width: 80px !important;
-    max-width: 80px !important;
-    min-width: 80px !important;
-    text-align: center !important;
-    text-align-last: center !important;
-    font-size: 11px !important;
-    white-space: nowrap !important;
-    box-sizing: border-box !important;
-}
+/* [UI 2026-10-21h] 这里原本是「.upload-zone select/button { flex:0 0 80px; width/max-width/min-width:80px }」
+   —— 正是「宽屏出现巨大空隙」的根因：子项被 max-width 钉死在 80px，父容器却是
+   justify-content:space-between，剩下的空间全被摊成 item 之间的空隙（640px 宽时实测 93px）；
+   同时 4×80 + 3×4 = 332px 在 ≤375px 时已超容器，直接横向溢出。
+   已整体移除，尺寸与间距改由下方 [UI 2026-10-21h] 的网格规则统一控制。 */
 .zone-stats span {
     width: 100% !important;
     box-sizing: border-box !important;
@@ -389,29 +382,60 @@
     max-height: 400px;
     overflow-y: auto;
 }
-/* 电脑端上传区横向分布 */
+/* [UI 2026-10-21h] 上传区：flex + space-between → 等宽网格
+   问题（用户反馈「切换屏幕大小时这几个会有很大间隙」）：
+     ① 父容器写 `justify-content:space-between`，子项又被 `max-width:80px` 钉死在 80px（见 ≤768px 段），
+        剩余空间无处可去 → 全部摊成 item 之间的空隙。实测 768px 宽时空隙 148px、640px 时 93px、
+        540px 时 57px，随窗口宽度剧烈变化，正是「切屏幕大小就出现大间隙」的来源。
+     ② ≤375px 时 4×80 + 3×4 = 332px 已超出容器（360px 视口实测右侧溢出 26px）。
+   做法：改为 grid 等宽列，间距恒为 8px —— 列宽自适应、空隙恒定、永不溢出、不会因 resize 抖。
+   保留原有外观（2px #999 边框 / 6px 圆角 / 44px 高 / 13px 字），只改布局。 */
 .upload-zone {
-    display: flex !important;
-    flex-direction: row !important;
-    flex-wrap: nowrap !important;
-    gap: 4px !important;
-    padding: 10px 14px !important;
-    justify-content: space-between !important;
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
     align-items: center !important;
+    justify-content: stretch !important;   /* 抵消历史 space-between，避免残留生效 */
+    gap: 8px !important;
+    padding: 10px 14px !important;
+    box-sizing: border-box !important;
 }
 
 .upload-zone select,
 .upload-zone input,
 .upload-zone button {
-    flex: 1 !important;
-    margin: 0 2px !important;
+    flex: 0 1 auto !important;    /* 网格内不再需要 flex-grow */
+    width: 100% !important;       /* 铺满格子 */
+    max-width: none !important;   /* ★ 关键：解掉历史 80px 上限，否则格子宽了控件仍是 80px */
+    min-width: 0 !important;      /* ★ 关键：允许被压缩到内容以下，窄屏不再溢出 */
+    margin: 0 !important;
     height: 44px !important;
     min-height: 44px !important;
     font-size: 13px !important;
     border: 2px solid #999 !important;
     border-radius: 6px !important;
     text-align: center !important;
+    text-align-last: center !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
     box-sizing: border-box !important;
+}
+/* ≤768px：4 个控件挤一行时「子模块：自动识别」必被截断，改 2×2；间距仍是 8px，不再出现空隙 */
+@media (max-width: 768px) {
+    .upload-zone { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+    .upload-zone select,
+    .upload-zone input,
+    .upload-zone button { font-size: 12px !important; }
+}
+@media (max-width: 400px) {
+    .upload-zone select,
+    .upload-zone input,
+    .upload-zone button { font-size: 11px !important; }
+}
+@media (max-width: 340px) {
+    /* 320px 极限宽度：左右内边距各收 8px，保证「子模块：自动识别」不被裁 */
+    .upload-zone select,
+    .upload-zone input,
+    .upload-zone button { padding-left: 4px !important; padding-right: 4px !important; }
 }
 
 /* 电脑端统计区域分布 */
