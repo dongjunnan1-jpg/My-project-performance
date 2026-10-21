@@ -59,6 +59,78 @@
   }catch(e){}
 })();
 </script>
+<script>
+/* ===== [UI 2026-10-21b] 筛选栏 SVG 图标跟随主题色 =====
+   原实现把颜色（#800020 / #8a6a6f）写死在 data-URI 里，data-URI 读不到 CSS 变量。
+   这里按当前 --main / --deep 重新生成一份 <style id="sfIconDyn">，
+   并监听 documentElement 的 style / data-skin 变化（applySkin、applyZoneTheme 都改它）。
+   只改 background-image，布局与交互零改动。 */
+(function(){
+  var SVG   = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='__C__' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'>__B__</svg>";
+  var CARET = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='__C__' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round' stroke-opacity='0.62'><path d='M6 9l6 6 6-6'/></svg>";
+  var ICONS = [
+    ['#sourceFilter',   "<path d='M12 6c-2-1.6-4.6-2.2-7-2.2v13.9c2.4 0 5 .6 7 2.1 2-1.5 4.6-2.1 7-2.1V3.8c-2.4 0-5 .6-7 2.2z'/><path d='M12 6v14'/>", 0],
+    ['#statusFilter',   "<path d='M4 7l1.7 1.7L8.4 5.9M4 13l1.7 1.7 2.7-2.8M4 19l1.7 1.7 2.7-2.8'/><path d='M11.5 7.2h9M11.5 13.2h9M11.5 19.2h6'/>", 1],
+    ['#moduleFilter',   "<rect x='4' y='4' width='7' height='7' rx='1.6'/><rect x='13' y='4' width='7' height='7' rx='1.6'/><rect x='4' y='13' width='7' height='7' rx='1.6'/><rect x='13' y='13' width='7' height='7' rx='1.6'/>", 1],
+    ['#subTypeFilter',  "<path d='M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z'/><circle cx='8' cy='8' r='1.4'/>", 1],
+    ['#leafTypeFilter', "<path d='M5 4v7a4 4 0 0 0 4 4h10'/><path d='M16 12l3 3-3 3'/>", 1],
+    ['#yearFilter',     "<rect x='3' y='5' width='18' height='16' rx='2'/><path d='M8 3v4M16 3v4M3 10h18'/>", 1],
+    ['#provinceFilter', "<path d='M12 21s7-5.3 7-11a7 7 0 1 0-14 0c0 5.7 7 11 7 11z'/><circle cx='12' cy='10' r='2.5'/>", 1],
+    ['.sf-multi-btn',   "<path d='M8 5v14M5 16l3 3 3-3M16 19V5M13 8l3-3 3 3'/>", 1]
+  ];
+
+  /* 相对亮度（WCAG）：浅金/浅黄主题的 main 太浅，白底上会发虚，改用 deep */
+  function lum(hex){
+    var h = String(hex || '').replace('#', '');
+    if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+    if (!/^[0-9a-fA-F]{6}$/.test(h)) return 0;
+    var c = [0, 2, 4].map(function(i){
+      var v = parseInt(h.substr(i, 2), 16) / 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  }
+  function build(){
+    var cs = getComputedStyle(document.documentElement);
+    var main = (cs.getPropertyValue('--main') || '').trim() || '#3a7ab0';
+    var deep = (cs.getPropertyValue('--deep') || '').trim() || '#2c5f8a';
+    var stroke = lum(main) > 0.40 ? deep : main;
+    var out = '';
+    var caretUrl = 'url("data:image/svg+xml,' + encodeURIComponent(CARET.replace('__C__', stroke)) + '")';
+    for (var i = 0; i < ICONS.length; i++){
+      var sel = ICONS[i][0];
+      var head = 'body .filter-bar ' + sel + ',body.mobile-mode .filter-bar ' + sel + ',body.pc-mode .filter-bar ' + sel;
+      var msHead = 'body.ms-zone .filter-bar ' + sel + ',body.ms-zone.mobile-mode .filter-bar ' + sel + ',body.ms-zone.pc-mode .filter-bar ' + sel;
+      var iconUrl = 'url("data:image/svg+xml,' + encodeURIComponent(SVG.replace('__C__', stroke).replace('__B__', ICONS[i][1])) + '")';
+      out += head + '{background-image:' + iconUrl + (ICONS[i][2] ? ',' + caretUrl : '') + ' !important}\n';
+      /* 面试分区一行 4 格（顺序有讲究：同权重靠后声明覆盖）
+         ① 基础：只留图标（手机 4 列太窄，右侧箭头省掉）
+         ② ≥769px 桌面格子宽 300px 左右：把箭头加回来，与其它分区保持一致
+         ③ ≤340px：连图标都放不下，整格纯文字 */
+      out += msHead + '{background-image:' + iconUrl + ' !important}\n';
+      if (ICONS[i][2]) out += '@media (min-width:769px){' + msHead + '{background-image:' + iconUrl + ',' + caretUrl + ' !important}}\n';
+      out += '@media (max-width:340px){' + msHead + '{background-image:none !important}}\n';
+    }
+    return out;
+  }
+  function apply(){
+    var el = document.getElementById('sfIconDyn');
+    if (!el){ el = document.createElement('style'); el.id = 'sfIconDyn'; (document.head || document.documentElement).appendChild(el); }
+    el.textContent = build();
+  }
+  var raf = 0;
+  function schedule(){
+    if (raf) return;
+    raf = (window.requestAnimationFrame || function(f){ return setTimeout(f, 16); })(function(){ raf = 0; apply(); });
+  }
+  apply();
+  document.addEventListener('DOMContentLoaded', apply);
+  if (window.MutationObserver){
+    new MutationObserver(schedule).observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'data-skin'] });
+  }
+  window.refreshFilterIcons = apply;
+})();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/js-mdict@1.0.6/dist/mdict.min.js"></script>
 <style>/* 最终统一 - PC手机完全一致 */
 /* 手机窄屏时保持PC布局，横向滚动 */
@@ -602,6 +674,161 @@ html, body { width:100%; max-width:100%; margin:0; padding:0; box-sizing:border-
   text-align: center;
   text-align-last: center;
 }
+
+/* ===== [UI 2026-10-21] 筛选栏九宫格外观重构（纯样式 + 显示文案，无筛选/点击逻辑改动） ===== */
+body:not(.essay-zone) .filter-bar,
+body.mobile-mode:not(.essay-zone) .filter-bar,
+body.pc-mode:not(.essay-zone) .filter-bar { gap: 6px !important; grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+body:not(.essay-zone) .filter-bar select,
+body.mobile-mode:not(.essay-zone) .filter-bar select,
+body.pc-mode:not(.essay-zone) .filter-bar select,
+body:not(.essay-zone) .filter-bar input#sourceFilter,
+body.mobile-mode:not(.essay-zone) .filter-bar input#sourceFilter,
+body.pc-mode:not(.essay-zone) .filter-bar input#sourceFilter,
+body:not(.essay-zone) .filter-bar .sf-multi-btn,
+body.mobile-mode:not(.essay-zone) .filter-bar .sf-multi-btn,
+body.pc-mode:not(.essay-zone) .filter-bar .sf-multi-btn,
+body:not(.essay-zone) .filter-bar button[onclick*="clearFilters"],
+body.mobile-mode:not(.essay-zone) .filter-bar button[onclick*="clearFilters"],
+body.pc-mode:not(.essay-zone) .filter-bar button[onclick*="clearFilters"] {
+  -webkit-appearance: none !important; appearance: none !important;
+  height: 46px !important; min-height: 46px !important;
+  font-size: 11.5px !important; font-weight: 500 !important; line-height: 1.15 !important;
+  text-align: center !important; text-align-last: center !important;
+  padding: 0 20px !important;
+  border: 1px solid #d8c3c7 !important; border-radius: 8px !important;
+  background-color: #fff !important; color: var(--deep) !important;
+  box-shadow: none !important;
+  background-repeat: no-repeat !important;
+  background-size: 15px 15px, 9px 9px !important;
+  background-position: 7px center, right 7px center !important;
+}
+@media (min-width: 769px) {
+  body:not(.essay-zone) .filter-bar select,
+  body.mobile-mode:not(.essay-zone) .filter-bar select,
+  body.pc-mode:not(.essay-zone) .filter-bar select,
+  body:not(.essay-zone) .filter-bar input#sourceFilter,
+  body.mobile-mode:not(.essay-zone) .filter-bar input#sourceFilter,
+  body.pc-mode:not(.essay-zone) .filter-bar input#sourceFilter,
+  body:not(.essay-zone) .filter-bar .sf-multi-btn,
+  body.mobile-mode:not(.essay-zone) .filter-bar .sf-multi-btn,
+  body.pc-mode:not(.essay-zone) .filter-bar .sf-multi-btn,
+  body:not(.essay-zone) .filter-bar button[onclick*="clearFilters"],
+  body.mobile-mode:not(.essay-zone) .filter-bar button[onclick*="clearFilters"],
+  body.pc-mode:not(.essay-zone) .filter-bar button[onclick*="clearFilters"] {
+    height: 52px !important; min-height: 52px !important; font-size: 13px !important;
+  }
+}
+/* [UI 2026-10-21b] 图标本身（background-image）改由 <style id="sfIconDyn"> 按当前主题色动态注入，
+   见 head 中的同名脚本；下列规则只负责布局，不再写死任何颜色。 */
+body:not(.essay-zone) .filter-bar #sourceFilter { padding: 0 14px 0 26px !important; }
+
+body:not(.essay-zone) .filter-bar #sourceFilter::placeholder { color: var(--deep) !important; opacity: 1 !important; font-weight: 500 !important; }
+body:not(.essay-zone) .filter-bar #statusFilter { padding: 0 22px 0 26px !important; }
+body:not(.essay-zone) .filter-bar #moduleFilter { padding: 0 22px 0 26px !important; }
+body:not(.essay-zone) .filter-bar #subTypeFilter { padding: 0 22px 0 26px !important; }
+body:not(.essay-zone) .filter-bar #leafTypeFilter { padding: 0 22px 0 26px !important; }
+body:not(.essay-zone) .filter-bar #yearFilter { padding: 0 22px 0 26px !important; }
+body:not(.essay-zone) .filter-bar #provinceFilter { padding: 0 22px 0 26px !important; }
+body:not(.essay-zone) .filter-bar .sf-multi-btn,
+body.mobile-mode:not(.essay-zone) .filter-bar .sf-multi-btn,
+body.pc-mode:not(.essay-zone) .filter-bar .sf-multi-btn {
+  padding: 4px 22px 4px 26px !important;
+  white-space: normal !important; display: flex !important;
+}
+body:not(.essay-zone) .filter-bar .sf-multi-btn .sf-multi-label { white-space: normal !important; line-height: 1.12 !important; }
+body:not(.essay-zone) .filter-bar .sf-multi-btn .sf-multi-caret { display: none !important; }
+body:not(.essay-zone) .filter-bar button[onclick*="clearFilters"],
+body.mobile-mode:not(.essay-zone) .filter-bar button[onclick*="clearFilters"],
+body.pc-mode:not(.essay-zone) .filter-bar button[onclick*="clearFilters"] {
+  position: relative !important;
+  display: flex !important; align-items: center !important; justify-content: center !important;
+  gap: 0 !important; padding: 0 22px 0 26px !important; font-weight: 500 !important;
+}
+body:not(.essay-zone) .filter-bar button[onclick*="clearFilters"] .sf-clear-ico,
+body.mobile-mode:not(.essay-zone) .filter-bar button[onclick*="clearFilters"] .sf-clear-ico,
+body.pc-mode:not(.essay-zone) .filter-bar button[onclick*="clearFilters"] .sf-clear-ico {
+  position: absolute !important; left: 7px !important; top: 50% !important;
+  transform: translateY(-50%) !important; width: 15px !important; height: 15px !important; flex: 0 0 15px !important;
+}
+body:not(.essay-zone) .ratio-label { gap: 6px !important; }
+body:not(.essay-zone) .ratio-input {
+  width: 68px !important; height: 40px !important; padding: 0 8px !important;
+  text-align: center !important; font-size: 12px !important; border-radius: 8px !important;
+}
+body:not(.essay-zone) .ratio-input::-webkit-outer-spin-button,
+body:not(.essay-zone) .ratio-input::-webkit-inner-spin-button { -webkit-appearance: none !important; margin: 0 !important; }
+body:not(.essay-zone) .ratio-input { -moz-appearance: textfield !important; }
+/* 超窄屏（≤340px）兜底：进一步收窄内边距与字号，保证 4 字格完整 */
+@media (max-width: 340px) {
+  body:not(.essay-zone) .filter-bar select,
+  body.mobile-mode:not(.essay-zone) .filter-bar select,
+  body.pc-mode:not(.essay-zone) .filter-bar select,
+  body:not(.essay-zone) .filter-bar input#sourceFilter,
+  body.mobile-mode:not(.essay-zone) .filter-bar input#sourceFilter,
+  body.pc-mode:not(.essay-zone) .filter-bar input#sourceFilter,
+  body:not(.essay-zone) .filter-bar .sf-multi-btn,
+  body.mobile-mode:not(.essay-zone) .filter-bar .sf-multi-btn,
+  body.pc-mode:not(.essay-zone) .filter-bar .sf-multi-btn,
+  body:not(.essay-zone) .filter-bar button[onclick*="clearFilters"] { font-size: 10.5px !important; padding: 0 16px 0 22px !important; }
+  body:not(.essay-zone) .filter-bar #yearFilter,
+  body:not(.essay-zone) .filter-bar #provinceFilter { padding: 0 16px 0 22px !important; }
+  body:not(.essay-zone) .filter-bar #sourceFilter,
+  body:not(.essay-zone) .filter-bar #statusFilter,
+  body:not(.essay-zone) .filter-bar #moduleFilter,
+  body:not(.essay-zone) .filter-bar #subTypeFilter,
+  body:not(.essay-zone) .filter-bar #leafTypeFilter,
+  body:not(.essay-zone) .filter-bar .sf-multi-btn { padding: 0 16px 0 22px !important; }
+  body:not(.essay-zone) .filter-bar button[onclick*="clearFilters"],
+  body.mobile-mode:not(.essay-zone) .filter-bar button[onclick*="clearFilters"],
+  body.pc-mode:not(.essay-zone) .filter-bar button[onclick*="clearFilters"] { padding: 0 16px 0 22px !important; white-space: nowrap !important; font-size: 10.5px !important; }
+
+}
+
+/* ===== [UI 2026-10-21c] 面试分区：4 个筛选格排成一行（地区 / 排序 / 题型 / 清除筛选） ===== */
+body.ms-zone .filter-bar,
+body.ms-zone.mobile-mode .filter-bar,
+body.ms-zone.pc-mode .filter-bar {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+}
+body.ms-zone .filter-bar .ratio-label { grid-column: 1 / -1 !important; }
+
+/* 4 列后每格只剩 73~90px（手机），必须收窄内边距 + 降一档字号；
+   右侧箭头在本分区由 JS 生成的图标规则去掉（见 [UI 2026-10-21b] 脚本），省出 16px。
+   ⚠ 必须按 id 写：上面的 #provinceFilter / #moduleFilter 是 id 选择器 (1,2,1)，
+   只写 `select` 的规则 (0,3,2) 压不过它。 */
+@media (max-width: 768px) {
+  body.ms-zone .filter-bar #provinceFilter,
+  body.ms-zone .filter-bar #moduleFilter,
+  body.ms-zone .filter-bar #sourceFilter,
+  body.ms-zone .filter-bar .sf-multi-btn,
+  body.ms-zone.mobile-mode .filter-bar .sf-multi-btn,
+  body.ms-zone.pc-mode .filter-bar .sf-multi-btn,
+  body.ms-zone .filter-bar button[onclick*="clearFilters"],
+  body.ms-zone.mobile-mode .filter-bar button[onclick*="clearFilters"],
+  body.ms-zone.pc-mode .filter-bar button[onclick*="clearFilters"] {
+    padding: 0 6px 0 21px !important;
+    font-size: 10.5px !important;
+  }
+}
+/* ≤340px：4 列下连图标都放不下，整格改为纯文字居中（图标由 JS 在该断点置 none） */
+@media (max-width: 340px) {
+  body.ms-zone .filter-bar #provinceFilter,
+  body.ms-zone .filter-bar #moduleFilter,
+  body.ms-zone .filter-bar #sourceFilter,
+  body.ms-zone .filter-bar .sf-multi-btn,
+  body.ms-zone.mobile-mode .filter-bar .sf-multi-btn,
+  body.ms-zone.pc-mode .filter-bar .sf-multi-btn,
+  body.ms-zone .filter-bar button[onclick*="clearFilters"],
+  body.ms-zone.mobile-mode .filter-bar button[onclick*="clearFilters"],
+  body.ms-zone.pc-mode .filter-bar button[onclick*="clearFilters"] {
+    padding: 0 6px !important;
+    font-size: 10px !important;
+  }
+  /* 图标置 none 后，清除按钮那张内联 <svg> 也要一起隐藏，否则会和居中文字重叠 */
+  body.ms-zone .filter-bar button[onclick*="clearFilters"] .sf-clear-ico { display: none !important; }
+}
+
 /* ===== [FIX 20260930] 排序 + 正确率区间 多选下拉面板 ===== */
 #sortFilter { display: none !important; }   /* 原下拉隐藏，由自定义面板接管 */
 .sf-multi { position: relative; display: block; width: 100%; min-width: 0; max-width: 100%; }
@@ -2835,10 +3062,10 @@ body.skin-dark .en-pagination button.active {
 
     <!-- 筛选栏 -->
     <div class="filter-bar" id="filterBar">
-        <select id="yearFilter"><option value="all">📅 全部年份</option></select><select id="provinceFilter"><option value="all">📍 全部省份</option></select>
-        <input id="sourceFilter" list="sourceOptions" type="text" placeholder="📚 全部来源" autocomplete="off"><datalist id="sourceOptions"></datalist>
+        <select id="yearFilter"><option value="all">全部年份</option></select><select id="provinceFilter"><option value="all">全部省份</option></select>
+        <input id="sourceFilter" list="sourceOptions" type="text" placeholder="全部来源" autocomplete="off"><datalist id="sourceOptions"></datalist>
         <select id="statusFilter">
-            <option value="all">🗂️ 全部状态</option>
+            <option value="all">全部状态</option>
             <option value="unanswered">只显示未做</option>
             <option value="answered">只显示已做</option>
             <option value="wrong">只显示错题</option>
@@ -2874,7 +3101,7 @@ body.skin-dark .en-pagination button.active {
                 <div class="sf-opt" data-group="range" data-value="range61_80" role="option">正确率 61-80%</div>
                 <div class="sf-opt" data-group="range" data-value="range81_100" role="option">正确率 81-100%</div>
             </div>
-        </div> <select id="moduleFilter"><option value="all">📂 全部模块</option></select> <select id="subTypeFilter"><option value="all">🏷️ 全部话题</option></select> <select id="leafTypeFilter"><option value="all">📋 全部细分题型</option></select> <button class="btn btn-outline" onclick="clearFilters()">✕ 清除筛选</button>
+        </div> <select id="moduleFilter"><option value="all">全部模块</option></select> <select id="subTypeFilter"><option value="all">全部话题</option></select> <select id="leafTypeFilter"><option value="all">全部细分</option></select> <button class="btn btn-outline" onclick="clearFilters()"><svg class="sf-clear-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7.8"/><path d="M9.4 9.4l5.2 5.2M14.6 9.4l-5.2 5.2"/></svg><span>清除筛选</span></button>
         <!-- [FIX 20261021] 原为 <label>：label 的隐式激活会把整行（「正确率」文字、~、% 及两侧空白）都变成点击热区，
              点空白也会聚焦到 #minRatioInput。改为 <div> 后只有精确点击 input 本身才进入输入，空白不响应。 -->
         <div class="ratio-label"><span class="ratio-label-text">正确率</span>
@@ -7974,7 +8201,7 @@ function updateFilterOptions() {
   // 统一重置状态下拉选项（含新增的「只显示心得」）
   if(statusFilter){
     statusFilter.innerHTML =
-      '<option value="all">🗂️ 全部状态</option>' +
+      '<option value="all">全部状态</option>' +
       '<option value="unanswered">只显示未做</option>' +
       '<option value="answered">只显示已做</option>' +
       '<option value="wrong">只显示错题</option>' +
@@ -7996,9 +8223,9 @@ function updateFilterOptions() {
     var essayQuestions=getZoneQuestions(activeZone, '__all__');
     var essayYears={};
     essayQuestions.forEach(function(q){ if(q.year && q.year!=='未知') essayYears[q.year]=true; });
-    yearFilter.innerHTML='<option value="all">📅 全部年份</option>'+Object.keys(essayYears).sort(function(a,b){ return Number(b)-Number(a); }).map(function(y){ return '<option value="'+y+'">'+y+'年</option>'; }).join('');
+    yearFilter.innerHTML='<option value="all">全部年份</option>'+Object.keys(essayYears).sort(function(a,b){ return Number(b)-Number(a); }).map(function(y){ return '<option value="'+y+'">'+y+'年</option>'; }).join('');
     var provinces={}; essayQuestions.forEach(function(q){ provinces[q.province||'其他']=true; });
-    provinceFilter.innerHTML='<option value="all">📍 全部地区</option>'+ESSAY_PROVINCES.concat(['其他']).filter(function(p){ return provinces[p]; }).map(function(p){ return '<option value="'+p+'">'+p+'</option>'; }).join('');
+    provinceFilter.innerHTML='<option value="all">全部地区</option>'+ESSAY_PROVINCES.concat(['其他']).filter(function(p){ return provinces[p]; }).map(function(p){ return '<option value="'+p+'">'+p+'</option>'; }).join('');
     sourceFilter.value=''; sourceOptions.innerHTML=''; window.sourceValues=[]; window._sourceCount={};
     return;
   }
@@ -8042,7 +8269,7 @@ function updateFilterOptions() {
     }
 
     var yearArray = [...years].sort(function(a, b) { return b - a; });
-    yearFilter.innerHTML = '<option value="all">📅 全部年份</option>' + 
+    yearFilter.innerHTML = '<option value="all">全部年份</option>' + 
         yearArray.map(function(y) {
             return '<option value="' + y + '">' + y + '年</option>';
         }).join('');
@@ -14889,15 +15116,15 @@ window.updateSubTypeFilter = function() {
     moduleFilter.style.display='';
     subTypeFilter.style.display='none';
     leafTypeFilter.style.display='none';
-    yearFilter.innerHTML=makeOptions('📅 全部年份',buildStats(years));
+    yearFilter.innerHTML=makeOptions('全部年份',buildStats(years));
     // 地区选项：显示题数
     var regionStats=buildStats(specialQs.map(function(q){ return q.region||'其他'; }));
-    provinceFilter.innerHTML=makeOptions(activeZone==='sl'?'🏷️ 全部话题':'📍 全部地区',activeZone==='sl'?buildStats(specialQs.map(function(q){ return q.topic||'其他'; })):regionStats);
+    provinceFilter.innerHTML=makeOptions(activeZone==='sl'?'全部话题':'全部地区',activeZone==='sl'?buildStats(specialQs.map(function(q){ return q.topic||'其他'; })):regionStats);
     // 题型选项：按当前选中的地区联动统计题数
     var selectedRegion=filterState.province||'all';
     var typeSourceQs=(activeZone==='sl'||selectedRegion==='all') ? specialQs : specialQs.filter(function(q){ return (q.region||'其他')===selectedRegion; });
     var typeStats=buildStats(typeSourceQs.map(getSpecialQuestionType));
-    moduleFilter.innerHTML=makeOptions('📋 全部题型 ('+typeSourceQs.length+'题)',typeStats);
+    moduleFilter.innerHTML=makeOptions('全部题型',typeStats);
     setSelectValue(yearFilter,filterState.year);
     setSelectValue(provinceFilter,filterState.province);
     setSelectValue(moduleFilter,activeZone==='sl'?filterState.leafType:filterState.module);
@@ -14926,7 +15153,7 @@ window.updateSubTypeFilter = function() {
     qs.forEach(function(q){ var topic = q.topic || '申论'; topicStats[topic] = (topicStats[topic] || 0) + 1; });
 
     var selectedModule = filterState.module || 'all';
-    moduleFilter.innerHTML = '<option value="all">📂 全部话题 (' + qs.length + '套)</option>';
+    moduleFilter.innerHTML = '<option value="all">全部话题</option>';
     Object.keys(topicStats).sort().forEach(function(topic){
       var option = document.createElement('option');
       option.value = topic;
@@ -14942,7 +15169,7 @@ window.updateSubTypeFilter = function() {
     var moduleQs = selectedModule === 'all' ? qs : qs.filter(function(q){ return (q.topic || '申论') === selectedModule; });
     var yearStats = {};
     moduleQs.forEach(function(q){ var year = q.year || '未知'; yearStats[year] = (yearStats[year] || 0) + 1; });
-    subTypeFilter.innerHTML = '<option value="all">📅 全部年份 (' + moduleQs.length + '套)</option>';
+    subTypeFilter.innerHTML = '<option value="all">全部年份</option>';
     Object.keys(yearStats).sort(function(a,b){ return Number(b) - Number(a); }).forEach(function(year){
       var option = document.createElement('option');
       option.value = year;
@@ -14955,7 +15182,7 @@ window.updateSubTypeFilter = function() {
     var provinceStats = {};
     var yearQs = filterState.subType === 'all' ? moduleQs : moduleQs.filter(function(q){ return (q.year || '未知') === filterState.subType; });
     yearQs.forEach(function(q){ var province = q.province || '其他'; provinceStats[province] = (provinceStats[province] || 0) + 1; });
-    leafTypeFilter.innerHTML = '<option value="all">📍 全部地区 (' + yearQs.length + '套)</option>';
+    leafTypeFilter.innerHTML = '<option value="all">全部地区</option>';
     Object.keys(provinceStats).sort().forEach(function(province){
       var option = document.createElement('option');
       option.value = province;
@@ -14969,7 +15196,7 @@ window.updateSubTypeFilter = function() {
     qs.forEach(function(q){ var type = q.questionType || q.type || q.subType || '面试'; typeStats[type] = (typeStats[type] || 0) + 1; });
 
     var selectedModule = filterState.module || 'all';
-    moduleFilter.innerHTML = '<option value="all">📂 全部题型 (' + qs.length + '题)</option>';
+    moduleFilter.innerHTML = '<option value="all">全部题型</option>';
     var msOrder = ['综合分析', '组织管理', '应急应变', '人际关系', '自我认知', '情景模拟', '演讲题', '观点题', '社会现象', '其他'];
     msOrder.forEach(function(type){
       if (typeStats[type]) {
@@ -14988,7 +15215,7 @@ window.updateSubTypeFilter = function() {
     var topicStats = {};
     var moduleQs = selectedModule === 'all' ? qs : qs.filter(function(q){ return (q.questionType || q.type || q.subType || '面试') === selectedModule; });
     moduleQs.forEach(function(q){ var topic = q.topic || q.subCategory || '其他'; topicStats[topic] = (topicStats[topic] || 0) + 1; });
-    subTypeFilter.innerHTML = '<option value="all">🏷️ 全部话题 (' + moduleQs.length + '题)</option>';
+    subTypeFilter.innerHTML = '<option value="all">全部话题</option>';
     Object.keys(topicStats).sort().forEach(function(topic){
       var option = document.createElement('option');
       option.value = topic;
@@ -15001,7 +15228,7 @@ window.updateSubTypeFilter = function() {
     var sourceStats = {};
     var topicQs = filterState.subType === 'all' ? moduleQs : moduleQs.filter(function(q){ return (q.topic || q.subCategory || '其他') === filterState.subType; });
     topicQs.forEach(function(q){ var src = q.source || '未知'; sourceStats[src] = (sourceStats[src] || 0) + 1; });
-    leafTypeFilter.innerHTML = '<option value="all">📚 全部来源 (' + topicQs.length + '题)</option>';
+    leafTypeFilter.innerHTML = '<option value="all">全部来源</option>';
     Object.keys(sourceStats).sort().forEach(function(src){
       var option = document.createElement('option');
       option.value = src;
@@ -15020,7 +15247,7 @@ window.updateSubTypeFilter = function() {
       filterState.leafType = 'all';
     }
 
-    moduleFilter.innerHTML = '<option value="all">📂 全部模块 (' + qs.length + '题)</option>';
+    moduleFilter.innerHTML = '<option value="all">全部模块</option>';
     // 已知模块按固定顺序优先展示，其余（含“未分类”）按题数从多到少追加
     var moduleOrder = ['常识判断', '政治理论', '言语理解与表达', '数量关系', '判断推理', '资料分析'];
     var orderedModules = moduleOrder.filter(function(module) { return moduleStats[module] > 0; });
@@ -15056,7 +15283,7 @@ window.updateSubTypeFilter = function() {
       filterState.subType = 'all';
       filterState.leafType = 'all';
     }
-    subTypeFilter.innerHTML = '<option value="all">📋 全部题型 (' + moduleQuestions.length + '题)</option>';
+    subTypeFilter.innerHTML = '<option value="all">全部题型</option>';
     subTypes = sortOptionsByYearDesc(subTypes, subTypeStats);
     subTypes.forEach(function(subType) {
       var option = document.createElement('option');
@@ -15081,7 +15308,7 @@ window.updateSubTypeFilter = function() {
     if (filterState.leafType !== 'all' && !leafTypes.includes(filterState.leafType)) {
       filterState.leafType = 'all';
     }
-    leafTypeFilter.innerHTML = '<option value="all">📋 全部细分题型 (' + leafQuestions.length + '题)</option>';
+    leafTypeFilter.innerHTML = '<option value="all">全部细分</option>';
     leafTypes = sortOptionsByYearDesc(leafTypes, leafTypeStats);
     leafTypes.forEach(function(leafType) {
       var option = document.createElement('option');
@@ -15100,7 +15327,7 @@ window.updateSubTypeFilter = function() {
       filterState.subType = 'all';
       filterState.leafType = 'all';
     }
-    moduleFilter.innerHTML = '<option value="all">📂 全部模块 (' + qs.length + '题)</option>';
+    moduleFilter.innerHTML = '<option value="all">全部模块</option>';
     modules.sort().forEach(function(module) {
       var option = document.createElement('option');
       option.value = module;
@@ -15122,7 +15349,7 @@ window.updateSubTypeFilter = function() {
       filterState.subType = 'all';
       filterState.leafType = 'all';
     }
-    subTypeFilter.innerHTML = '<option value="all">📋 全部题型 (' + moduleQuestions.length + '题)</option>';
+    subTypeFilter.innerHTML = '<option value="all">全部题型</option>';
     subTypes = sortOptionsByYearDesc(subTypes, subTypeStats);
     subTypes.forEach(function(subType) {
       var option = document.createElement('option');
@@ -15143,7 +15370,7 @@ window.updateSubTypeFilter = function() {
     if (filterState.leafType !== 'all' && !leafTypes.includes(filterState.leafType)) {
       filterState.leafType = 'all';
     }
-    leafTypeFilter.innerHTML = '<option value="all">📋 全部细分题型 (' + leafQuestions.length + '题)</option>';
+    leafTypeFilter.innerHTML = '<option value="all">全部细分</option>';
     leafTypes = sortOptionsByYearDesc(leafTypes, leafTypeStats);
     leafTypes.forEach(function(leafType) {
       var option = document.createElement('option');
@@ -15264,7 +15491,7 @@ function initProvinceFilter() {
     '甘肃', '青海', '宁夏', '新疆', '深圳'
   ];
   
-  provinceFilter.innerHTML = '<option value="all">📍 全部省份</option>';
+  provinceFilter.innerHTML = '<option value="all">全部省份</option>';
   allProvinces.forEach(function(province) {
     provinceFilter.innerHTML += '<option value="' + province + '">' + province + '</option>';
   });
@@ -20094,8 +20321,8 @@ window.mlImport = async function(input){
   var sel = document.getElementById('sortFilter');
   if(!btn || !panel || !sel) return;
 
-  var SORT_LABELS = { 'default':'🔀 默认顺序', 'ratioDesc':'⬆️ 正确率从高到低', 'ratioAsc':'⬇️ 正确率从低到高' };
-  var RANGE_LABELS = { 'all':'全部区间', 'range0_40':'📉 正确率 0-40%', 'range41_60':'📊 正确率 41-60%', 'range61_80':'📈 正确率 61-80%', 'range81_100':'🏆 正确率 81-100%' };
+  var SORT_LABELS = { 'default':'默认顺序', 'ratioDesc':'正确率高→低', 'ratioAsc':'正确率低→高' };
+  var RANGE_LABELS = { 'all':'全部区间', 'range0_40':'0-40%', 'range41_60':'41-60%', 'range61_80':'61-80%', 'range81_100':'81-100%' };
   // [FIX 20260930] 窄屏（手机端）用短标签，避免文字被截断
   var SORT_LABELS_SHORT = { 'default':'🔀', 'ratioDesc':'⬆️', 'ratioAsc':'⬇️' };
   var RANGE_LABELS_SHORT = { 'all':'默认', 'range0_40':'0-40%', 'range41_60':'41-60%', 'range61_80':'61-80%', 'range81_100':'81-100%' };
@@ -20112,10 +20339,10 @@ window.mlImport = async function(input){
     });
     // 按钮摘要：排序 + 区间（区间为 all 时不显示）
     // 窄屏用短标签，宽屏用完整标签
-    var narrow = window.innerWidth <= 768;
-    var SL = narrow ? SORT_LABELS_SHORT : SORT_LABELS;
-    var RL = narrow ? RANGE_LABELS_SHORT : RANGE_LABELS;
-    var sep = narrow ? '｜' : ' ｜ ';
+    var narrow = window.innerWidth <= 768;   // [UI 2026-10-21] 仅用于分隔符间距，文案不再按屏宽切换
+    var SL = SORT_LABELS;
+    var RL = RANGE_LABELS;
+    var sep = ' ';
     var txt = SL[sortBy] || SL['default'];
     if(range && range !== 'all'){ txt += sep + (RL[range] || range); }
     if(labelEl) labelEl.textContent = txt;
