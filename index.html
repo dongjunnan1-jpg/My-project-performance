@@ -791,13 +791,21 @@ body.ms-zone.mobile-mode .filter-bar,
 body.ms-zone.pc-mode .filter-bar {
   grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
 }
-body.ms-zone .filter-bar .ratio-label { grid-column: 1 / -1 !important; }
+/* [UI 2026-10-21d] 面试是主观题（无选项、无对错），题库里没有「正确率」：
+   隐藏正确率输入行，以及「排序 / 正确率区间」下拉，只留 年份 / 地区 / 题型 / 清除筛选 四格一行。 */
+body.ms-zone .filter-bar .ratio-label,
+body.ms-zone.mobile-mode .filter-bar .ratio-label,
+body.ms-zone.pc-mode .filter-bar .ratio-label,
+body.ms-zone .filter-bar .sf-multi,
+body.ms-zone.mobile-mode .filter-bar .sf-multi,
+body.ms-zone.pc-mode .filter-bar .sf-multi { display: none !important; }
 
 /* 4 列后每格只剩 73~90px（手机），必须收窄内边距 + 降一档字号；
    右侧箭头在本分区由 JS 生成的图标规则去掉（见 [UI 2026-10-21b] 脚本），省出 16px。
    ⚠ 必须按 id 写：上面的 #provinceFilter / #moduleFilter 是 id 选择器 (1,2,1)，
    只写 `select` 的规则 (0,3,2) 压不过它。 */
 @media (max-width: 768px) {
+  body.ms-zone .filter-bar #yearFilter,
   body.ms-zone .filter-bar #provinceFilter,
   body.ms-zone .filter-bar #moduleFilter,
   body.ms-zone .filter-bar #sourceFilter,
@@ -813,6 +821,7 @@ body.ms-zone .filter-bar .ratio-label { grid-column: 1 / -1 !important; }
 }
 /* ≤340px：4 列下连图标都放不下，整格改为纯文字居中（图标由 JS 在该断点置 none） */
 @media (max-width: 340px) {
+  body.ms-zone .filter-bar #yearFilter,
   body.ms-zone .filter-bar #provinceFilter,
   body.ms-zone .filter-bar #moduleFilter,
   body.ms-zone .filter-bar #sourceFilter,
@@ -8707,6 +8716,10 @@ function getFiltered(skipSort){
   if(activeZone==='ms'){
     // 面试：保持全文搜索（题目 / 参考答案 / 解析）
     if(kw) qs=qs.filter(function(q){ return getZoneSearchText(q).indexOf(kw)>=0; });
+    // [UI 2026-10-21d] 年份筛选：与年份下拉的生成口径一致（试卷名优先，其次来源）
+    if(filterState.year && filterState.year!=='all'){
+      qs=qs.filter(function(q){ return String(extractYear(q.paperName||q.source||''))===String(filterState.year); });
+    }
     if(filterState.province!=='all') qs=qs.filter(function(q){ return (q.region||'其他')===filterState.province; });
     if(filterState.module!=='all') qs=qs.filter(function(q){ return getSpecialQuestionType(q)===filterState.module; });
     if(filterState.status==='note') qs=qs.filter(function(q){ return getQuestionNoteCount(q._key) > 0; });
@@ -15104,11 +15117,13 @@ window.updateSubTypeFilter = function() {
       else { keys.sort(function(a,b){ return a.localeCompare(b,'zh-CN'); }); }
       return '<option value="all">'+label+'</option>'+keys.map(function(value){ return '<option value="'+escapeHtml(value)+'">'+escapeHtml(value)+' ('+stats[value]+'题)</option>'; }).join('');
     };
-    var years=unique(specialQs.map(function(q){ return q.year; })).sort(function(a,b){ return Number(b)-Number(a); });
+    // 面试题目本身没有 year 字段，年份统一从「试卷名 / 来源」里的 4 位年份提取（与筛选、默认排序同口径）
+    var msYearStats={};
+    specialQs.forEach(function(q){ var y=extractYear(q.paperName||q.source||''); if(y) msYearStats[y]=(msYearStats[y]||0)+1; });
     var topics=unique(specialQs.map(function(q){ return q.topic||'其他'; })).sort();
     var regions=unique(specialQs.map(function(q){ return q.region||'其他'; })).sort();
     var types=activeZone==='sl' ? unique([].concat.apply([],specialQs.map(function(q){ return (q.essayQuestions||[]).map(getSpecialQuestionType); }))).sort() : unique(specialQs.map(getSpecialQuestionType)).sort();
-    yearFilter.style.display=activeZone==='sl'?'':'none';
+    yearFilter.style.display='';   /* [UI 2026-10-21d] 面试分区增加「年份」筛选，排在「地区」前面 */
     provinceFilter.style.display='';
     sourceFilter.style.display='none';
     statusFilter.style.display='none';
@@ -15116,7 +15131,7 @@ window.updateSubTypeFilter = function() {
     moduleFilter.style.display='';
     subTypeFilter.style.display='none';
     leafTypeFilter.style.display='none';
-    yearFilter.innerHTML=makeOptions('全部年份',buildStats(years));
+    yearFilter.innerHTML='<option value="all">全部年份</option>'+Object.keys(msYearStats).sort(function(a,b){ return Number(b)-Number(a); }).map(function(y){ return '<option value="'+y+'">'+y+'年 ('+msYearStats[y]+'题)</option>'; }).join('');
     // 地区选项：显示题数
     var regionStats=buildStats(specialQs.map(function(q){ return q.region||'其他'; }));
     provinceFilter.innerHTML=makeOptions(activeZone==='sl'?'全部话题':'全部地区',activeZone==='sl'?buildStats(specialQs.map(function(q){ return q.topic||'其他'; })):regionStats);
