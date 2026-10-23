@@ -84,6 +84,35 @@ const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
     await page.close();
   }
 
+  /* --- 1b. provider 大小写不对（'DeepSeek'）—— 用户截图那种：API Key 和模型都有值，下拉却是空框 --- */
+  {
+    const page = await open(JSON.stringify({ provider: 'DeepSeek', providerConfigs: { DeepSeek: { apiKey: 'sk-x', model: 'deepseek-flash' } } }), { width: 375, height: 667 });
+    report.cases.caseSensitive = await page.evaluate(() => {
+      const sel = document.getElementById('aiProvider');
+      const opt = sel.options[sel.selectedIndex];
+      return {
+        beforeOpen: { value: sel.value, index: sel.selectedIndex },   // 打开前：index=-1 就是"空框"
+        modelBox: document.getElementById('aiModel').value
+      };
+    });
+    await page.evaluate(() => { document.getElementById('aiSettingsBtn').click(); });
+    await page.waitForTimeout(300);
+    report.cases.caseSensitive.afterOpen = await page.evaluate(() => {
+      const sel = document.getElementById('aiProvider');
+      const opt = sel.options[sel.selectedIndex];
+      const saved = JSON.parse(localStorage.getItem('qz_ai_config') || '{}');
+      return {
+        shown: opt && opt.textContent,
+        value: sel.value,
+        aiProvider: (typeof aiConfig !== 'undefined' && aiConfig.provider) || '',
+        savedProvider: saved.provider,
+        savedKeys: Object.keys(saved.providerConfigs || {}),
+        savedModel: (saved.providerConfigs || {}).deepseek && saved.providerConfigs.deepseek.model
+      };
+    });
+    await page.close();
+  }
+
   /* --- 2. provider 是个不在 option 列表里的野值 --- */
   {
     const page = await open(JSON.stringify({ provider: 'doubao', providerConfigs: { doubao: { apiKey: 'k', model: 'x' } } }));

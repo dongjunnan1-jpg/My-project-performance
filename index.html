@@ -23528,37 +23528,72 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
   });
 
   /* ---------- 11b. 兜底：AI 面板最顶部那个「AI 服务商」下拉不能空着 ----------
-     [VOICE 2026-10-23b] 现象：面板打开时最顶上那格里什么都不显示（以前是有字的）。
-     两条独立成因，一起兜住：
-       ① 值层面：select.value 赋了个空串 / 不在 option 列表里的值 → 原生控件就是"空白框"。
-          这里校正成合法值，缺 option 就补一个同名 option。
-       ② 绘制层面（iOS Safari 上的真凶）：面板是 `position:fixed + transform:translate(-50%,-50%)`
-          居中、内部还能滚动；语音设置区把面板撑高之后开始出现滚动条，这个组合下原生 <select>
-          的文字会**不重绘**，只画出一个空框——数据明明是对的（同一份 aiConfig 的模型框能正常显示）。
-          修法见 installStyle：面板改成 inset:0 + margin:auto 居中（彻底不用 transform），
-          打开时再补一次强制重绘。 */
+     [VOICE 2026-10-23c] 现象（用户实录）：选了 DeepSeek，框里还是空的；但 API Key 和
+     「模型」框都正常显示 deepseek-flash。原因很确定：**存档里的 provider 不是合法 option 值**
+     （例如大小写不同的 'DeepSeek'、或早期版本写进去的野标识）。原生 <select> 一旦 .value 匹配
+     不到任何 option，selectedIndex 就是 -1 —— 控件只画一个空框，和文字颜色、CSS 都无关。
+     三层兜底，依次执行：
+       ① normalizeAIProvider：大小写/空格差异 → 规范成合法键（顺手把 providerConfigs 一起搬），
+          这一步还能把「AI 一直报未知服务商」的隐性故障一起修掉；
+       ② 仍非法的（真·野标识）→ 补一个同名 option 让它至少能显示出来，并标注「未识别」；
+       ③ 文字色与底色相同时强制深色（极端主题下的另一条成因）。
+     另外保留一次强制重绘，防个别 WebView 的绘制残留。 */
+  function aiProviderKeys(){
+    var sel = document.getElementById('aiProvider'), keys = [], i;
+    if(sel && sel.options){
+      for(i = 0; i < sel.options.length; i++) keys.push(sel.options[i].value);
+    }
+    if(!keys.length && typeof AI_ENDPOINTS !== 'undefined' && AI_ENDPOINTS){
+      keys = Object.keys(AI_ENDPOINTS);
+    }
+    return keys;
+  }
+
+  // 返回 true 表示把存档里的非法 provider 规范成了合法键（并已落盘）
+  function normalizeAIProvider(){
+    try{
+      if(typeof aiConfig === 'undefined' || !aiConfig || !aiConfig.provider) return false;
+      var cur = String(aiConfig.provider);
+      var keys = aiProviderKeys();
+      if(!keys.length || keys.indexOf(cur) >= 0) return false;      // 已合法
+      var hit = '';
+      for(var i = 0; i < keys.length; i++){
+        if(keys[i].toLowerCase() === cur.toLowerCase().replace(/^\s+|\s+$/g, '')){ hit = keys[i]; break; }
+      }
+      if(!hit) return false;                                        // 规范不出来，交给 ② 显示
+      aiConfig.provider = hit;
+      if(aiConfig.providerConfigs && aiConfig.providerConfigs[cur]){
+        if(!aiConfig.providerConfigs[hit]) aiConfig.providerConfigs[hit] = aiConfig.providerConfigs[cur];   // 密钥/模型别丢
+        delete aiConfig.providerConfigs[cur];                                                              // 老键清掉，免得下次又读到
+      }
+      try{ localStorage.setItem('qz_ai_config', JSON.stringify(aiConfig)); }catch(e){}
+      console.log('[AI] 服务商标识已规范化：' + cur + ' → ' + hit);
+      return true;
+    }catch(e){ return false; }
+  }
+
   function ensureAIProviderSelected(){
     var sel = document.getElementById('aiProvider');
     if(!sel || !sel.options) return;
 
-    if(!sel.value){                                  // ① 值不合法 → 校正
+    normalizeAIProvider();                           // ① 先把存档值修成合法键
+
+    if(!sel.value){                                  // ② 值不合法 → 校正 / 补 option
       var want = '';
       try{ want = (typeof aiConfig !== 'undefined' && aiConfig && aiConfig.provider) ? String(aiConfig.provider) : ''; }catch(e){}
       if(!want) want = 'deepseek';
-      var hit = false;
-      for(var i = 0; i < sel.options.length; i++){
-        if(sel.options[i].value === want){ hit = true; break; }
-      }
+      var keys = aiProviderKeys(), hit = false;
+      for(var i = 0; i < keys.length; i++){ if(keys[i] === want){ hit = true; break; } }
       if(!hit){
         var opt = document.createElement('option');
         opt.value = want;
-        opt.textContent = want;
+        opt.textContent = want + '（未识别，请重选）';
         sel.appendChild(opt);
       }
       sel.value = want;
     }
 
-    // ② 值对但可能"看不见"：文字色被主题配成和底色一致时强制回深色（只在真的看不见时才动手）
+    // ③ 值对但可能"看不见"：文字色被主题配成和底色一致时强制回深色（只在真的看不见时才动手）
     try{
       var cs = window.getComputedStyle(sel);
       if(cs && (cs.color === 'rgba(0, 0, 0, 0)' || cs.color === cs.backgroundColor)){
@@ -23566,7 +23601,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       }
     }catch(e){}
 
-    repaintSelect(sel);                              // ③ iOS：强制重绘一次，把文字画出来
+    repaintSelect(sel);                              // ④ 强制重绘，防 WebView 残影
   }
   // 换掉 opacity 触发重绘：不是 clone（clone 会丢 change 监听和当前值），只是让合成层失效重建
   function repaintSelect(el){
