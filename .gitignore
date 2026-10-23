@@ -16,3 +16,6 @@ index.html.broken-20260926
 # 编辑器 / AI 工具的本地配置（逐机器不同，不应进仓库）
 .vscode/
 .workbuddy/
+
+# WorkBuddy 发布标记（本机内部文件，不进仓库）
+.wbapp_*.genie
