@@ -22632,8 +22632,54 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
   var RING_R = 10.6, RING_C = 2 * Math.PI * RING_R;
 
   /* ---------- 3. 运行时状态（同一时间只允许一题在播） ---------- */
-  var voiceState = { key:null, status:'idle', text:'', source:'', audio:null, objectUrl:null, utterance:null };
+  var voiceState = { key:null, status:'idle', text:'', source:'', audio:null, objectUrl:null, utterance:null, speaker:null };
   var playToken = 0;                            // 播放会话令牌：任何异步回来先验令牌，过期直接丢弃
+
+  /* ---------- 0b. 播放权限「解锁」 ----------
+     [VOICE 2026-10-23g] 用户反馈「有时候点播放就失败」，提示 NotAllowedError。
+
+     这不是合成失败，是**自动播放策略**：云端合成要 1~3 秒，而「用户手势」的有效期只有一瞬，
+     等音频回来再 play() 就被 iOS/Safari/微信 WebView 拒掉。缓存命中时几毫秒就播，所以能过——
+     正好对上「有时候」这个现象（同一道题第二次点就好了，因为已经预生成在本地）。
+
+     解法（业界通用）：整个应用只留**一个** <audio>，在**点击的同步栈里**先用一段静音 WAV 播一下，
+     把手势「用掉」换一个解锁状态；之后换成真正的音频再 play() 就一路绿灯。
+     微信/部分安卓 WebView 连这个都拦，得借 WeixinJSBridge.getNetworkType 那一下才放行。 */
+  // 0.35 秒的静音 WAV（别用「零长度」的：那种会在同一微任务里就结束，
+  // 它迟到的 ended 事件会打到紧接着换上去的真音频上，把播放瞬间掐掉）
+  var SILENT_WAV = 'data:audio/wav;base64,UklGRjYLAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgATElTVBoAAABJTkZPSVNGVA0AAABMYXZmNjMuMS4xMDEAAGRhdGHwCgAAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgA==';
+  var audioEl = null, audioUnlocked = false;
+
+  function voiceAudioEl(){
+    if(audioEl) return audioEl;
+    audioEl = new Audio();
+    audioEl.preload = 'auto';
+    try{ audioEl.setAttribute('playsinline', ''); }catch(e){}
+    try{ audioEl.setAttribute('webkit-playsinline', ''); }catch(e){}
+    try{ audioEl.style.display = 'none'; document.body.appendChild(audioEl); }catch(e){}
+    return audioEl;
+  }
+
+  // 必须在用户手势的同步栈里调用（onVoiceClick 的第一行）
+  function unlockAudio(){
+    if(audioUnlocked) return;
+    audioUnlocked = true;                        // 先置位：连点不会重复解锁（重复设 src 会打断正在播的音频）
+    var a = voiceAudioEl();
+    function kick(){
+      try{
+        a.src = SILENT_WAV;
+        var p = a.play();
+        if(p && typeof p.catch === 'function') p.catch(function(){});   // 静音都放不了就算了，别抛到控制台
+      }catch(e){}
+    }
+    try{
+      if(window.WeixinJSBridge && typeof window.WeixinJSBridge.invoke === 'function'){
+        window.WeixinJSBridge.invoke('getNetworkType', {}, kick);       // 微信 WebView 专用解锁姿势
+        return;
+      }
+    }catch(e){}
+    kick();
+  }
 
   // 轻提示：必须是**用户可见**的。实测本工程里没有全局 mlToast（typeof mlToast === 'undefined'，
   // 它被包在素材库的 IIFE 里），所以这里优先用全局同名函数，缺了就自建一个非阻塞 toast。
@@ -22752,6 +22798,16 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     return s.length > 42 ? s.slice(0, 42) + '…' : s;
   }
 
+  /* 被自动播放策略拦下 ≠ 合成失败：
+     音频其实已经躺在 <audio> 里了，只是系统不许它自己出声。
+     所以不退化成浏览器语音、也不丢掉这段音频，只把按钮切成 ▶，
+     用户再点一下 —— 那一下是真正的用户手势，play() 必定能过，且不用重新合成。 */
+  function pauseForAutoplay(){
+    progressDone();                              // 环直接收满，不再让人以为还在等
+    setStatus('paused');
+    toast('语音已就绪，系统拦了自动播放，再点一下 🎧');
+  }
+
 
   function refreshButtons(){
     document.querySelectorAll('.q-voice-btn').forEach(function(btn){
@@ -22805,15 +22861,17 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     try{ if(window.speechSynthesis) window.speechSynthesis.cancel(); }catch(e){}
     releaseAudio();
     voiceState.key = null; voiceState.text = ''; voiceState.source = '';
-    voiceState.status = 'idle'; voiceState.utterance = null;
+    voiceState.status = 'idle'; voiceState.utterance = null; voiceState.speaker = null;
     progressHide();
     refreshButtons();
   }
   function releaseAudio(){
     if(voiceState.audio){
-      try{ voiceState.audio.pause(); }catch(e){}
-      try{ voiceState.audio.removeAttribute('src'); }catch(e){}
-      try{ voiceState.audio.load(); }catch(e){}
+      var a = voiceState.audio;
+      try{ a.onplaying = null; a.onended = null; a.onerror = null; }catch(e){}
+      try{ a.pause(); }catch(e){}
+      try{ a.removeAttribute('src'); }catch(e){}
+      try{ a.load(); }catch(e){}
       voiceState.audio = null;
     }
     if(voiceState.objectUrl){
@@ -22829,10 +22887,25 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
   }
   function resumePlayback(){
     if(voiceState.status !== 'paused') return;
+    // ① 流式讲解被自动播放策略拦住时，续播的是流水线里「已经合成好的那一段」，后面继续排队
+    if(voiceState.speaker && typeof voiceState.speaker.resume === 'function'){
+      var sp = voiceState.speaker;
+      voiceState.speaker = null;
+      if(sp.resume()) return;                     // 有挂起的段落 → 交给它自己接着播（onplaying 会切 playing）
+    }
+    // ② 普通音频（缓存命中 / 整段合成）：这一下点击在手势里，play() 必定能过
     if(voiceState.audio){
-      var p = voiceState.audio.play();
-      if(p && typeof p.catch === 'function') p.catch(function(){ voiceStop(); });
+      var audio = voiceState.audio;
+      var p = audio.play();
       setStatus('playing');
+      if(p && typeof p.catch === 'function'){
+        p.catch(function(err){
+          var name = (err && err.name) || '';
+          if(name === 'AbortError') return;
+          setStatus('paused');                    // 又被拦：别把播放器关掉，留着再点
+          toast('系统还没放行播放，再点一下 🎧');
+        });
+      }
       return;
     }
     var synth = window.speechSynthesis;
@@ -22929,25 +23002,47 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     });
   }
 
+  /* 播放一段 objectURL。全程复用**同一个** <audio>（只有它被手势解锁过），
+     换源前把上一段的回调清干净，否则上一段的 onerror/onended 会打到这一段上。 */
   function playObjectUrl(objUrl, token){
     return new Promise(function(resolve, reject){
-      var audio = new Audio(objUrl);
-      audio.preload = 'auto';
+      var audio = voiceAudioEl();
+      audio.onplaying = null; audio.onended = null; audio.onerror = null;
+      try{ audio.pause(); }catch(e){}
+      // 序号：上一段音频的迟到事件（静音解锁那段尤其常见）不能打到这一段上
+      audio.__playSeq = (audio.__playSeq || 0) + 1;
+      var mySeq = audio.__playSeq;
+      var gotPlaying = false;                     // 没真正出声前的 ended 一定是别的音源串过来的
       voiceState.audio = audio;
       voiceState.objectUrl = objUrl;
       // 真正出声的那一刻才把等待进度条收尾（play() 成功 ≠ 已经出声）
       audio.onplaying = function(){
+        if(audio.__playSeq !== mySeq) return;
         if(token !== undefined && token !== playToken) return;
+        gotPlaying = true;
         setStatus('playing');                     // 出声了才从「等待环」切到播放态
         progressDone();
       };
-      audio.onended = function(){ resolve('ended'); };
-      audio.onerror = function(){ reject(new Error('音频解码/播放失败')); };
+      audio.onended = function(){
+        if(audio.__playSeq !== mySeq || !gotPlaying) return;
+        resolve('ended');
+      };
+      audio.onerror = function(){
+        if(audio.__playSeq !== mySeq) return;
+        reject(new Error('音频解码/播放失败'));
+      };
+      try{ audio.src = objUrl; }catch(e){ reject(new Error('音频地址赋值失败')); return; }
       var p = audio.play();
       if(p && typeof p.then === 'function'){
         p.then(null, function(err){
-          // 自动播放策略拦截（请求耗时超过用户手势有效期）也会落到这里
-          reject(new Error('浏览器拒绝播放：' + ((err && err.name) || 'NotAllowedError')));
+          var name = (err && err.name) || 'NotAllowedError';
+          if(name === 'AbortError'){ resolve('canceled'); return; }      // 换源/被下一段打断，不算失败
+          var e = new Error(name === 'NotAllowedError'
+            ? '系统拦了自动播放'
+            : '播放失败：' + name);
+          e.name = name;
+          e.autoplay = (name === 'NotAllowedError');                    // 上层据此「说人话」，别误报成合成失败
+          reject(e);
         });
       }
     });
@@ -23113,8 +23208,12 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       }
       return playObjectUrl(objUrl, token);
     }).catch(function(err){
-      console.warn('[VOICE] ' + engineLabel() + ' 合成失败，已停止（不退回浏览器语音）：', err && (err.message || err));
-      throw err;                                           // 交给 startSpeak 提示 + 归位
+      if(err && err.autoplay){
+        console.warn('[VOICE] 音频已合成，但被系统拦了自动播放（等用户再点一下）：', err.message);
+      }else{
+        console.warn('[VOICE] ' + engineLabel() + ' 合成失败，已停止（不退回浏览器语音）：', err && (err.message || err));
+      }
+      throw err;                                           // 交给 startSpeak 分流处理（拦截 → 变 ▶；真失败 → 提示 + 归位）
     });
   }
 
@@ -23124,6 +23223,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     voiceState.key = key;
     voiceState.text = text;
     voiceState.source = source || '';
+    voiceState.speaker = null;                  // 整段播放，不走流式流水线
     releaseAudio();
     refreshButtons();
     // 注意：这里**先不切 playing** —— 云端引擎还要合成首句，切换权交给「真正出声」那一刻
@@ -23140,6 +23240,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     }
     function fail(err){
       if(token !== playToken) return;
+      if(err && err.autoplay){ pauseForAutoplay(); return; }   // 音频已经好了，只是系统不许出声
       console.warn('[VOICE] 播报失败：', err && (err.message || err));
       voiceStop();
       toast(engineLabel() + ' 合成失败：' + shortErr(err) + '（不会再用浏览器语音）');
@@ -23158,6 +23259,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       try{ url = URL.createObjectURL(hit.blob); }catch(e){ url = null; }
       if(!url) return synth();
       return playObjectUrl(url, token).then(finish, function(err){
+        if(err && err.autoplay){ pauseForAutoplay(); return; }  // 缓存的音频没问题，别白花一次合成
         // 预生成的音频坏了（极少见）→ 现场重合成一次，不走死循环
         console.warn('[VOICE] 缓存的音频播不了，改为现场合成：', err && (err.message || err));
         return synth();
@@ -23555,6 +23657,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
   function makeEngineSpeaker(token){
     var queue = [], cursor = 0, running = false, closed = false, started = false, dead = false;
     var urls = [];
+    var pendingResume = null;                     // 被自动播放拦住时，挂起「这一段 + 后面继续」
 
     function revokeAll(){
       urls.forEach(function(u){ try{ URL.revokeObjectURL(u); }catch(e){} });
@@ -23587,13 +23690,24 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
             return;
           }
           urls.push(objUrl);
-          if(!started){ started = true; setStatus('playing'); progressDone(); }
-          return playObjectUrl(objUrl, token);
+          if(!started) started = true;                   // 「出声」由 playObjectUrl 的 onplaying 判定
+          return playObjectUrl(objUrl, token).catch(function(err){
+            if(err && err.autoplay){
+              // 系统不许出声：这一段已经合成好了，留着等用户再点一下（那一下在手势里，必定能过），
+              // 之后流水线照旧往后走 —— 不能在这里 revoke，否则重放时音频没了。
+              pendingResume = function(){
+                return playObjectUrl(objUrl, token).then(function(){ if(!dead) next(); });
+              };
+              pauseForAutoplay();
+              throw { __autoplay: true };
+            }
+            throw err;
+          });
         }).then(function(){
           if(dead) return;
           next();
         }).catch(function(err){
-          if(dead) return;
+          if(dead || (err && err.__autoplay)) return;    // 挂起等用户点，不当作失败
           fail(err);
         });
       })();
@@ -23605,7 +23719,14 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
         pump();
       },
       finish: function(){ closed = true; pump(); },
-      isStarted: function(){ return started; }
+      isStarted: function(){ return started; },
+      resume: function(){
+        if(!pendingResume) return false;
+        var fn = pendingResume;
+        pendingResume = null;
+        fn().catch(function(){ if(token === playToken) voiceStop(); });
+        return true;
+      }
     };
   }
 
@@ -23646,6 +23767,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     var acc = '', buf = '', ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
     streamCtrl = ctrl;
     voiceState.source = 'ai';                     // 一开始就标成 AI 稿，别等全文结束（暂停/回放要靠它判来源）
+    voiceState.speaker = speaker;                 // 被自动播放拦住时，续播要靠它把后面的段落接上
     // 卡住保护：模型中途 15 秒不出新字（掉线/被判风控/网关挂住）→ 主动 abort 收尾，
     // 不能让语音停在半句上、按钮一直转圈。
     var idleTimer = 0;
@@ -23755,6 +23877,8 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
 
   function onVoiceClick(key, btn, ev){
     if(ev){ ev.stopPropagation(); ev.preventDefault(); }
+    // 必须在手势的同步栈里（第一行）就把播放权限解锁，否则合成回来的 audio.play() 会被系统拒掉
+    unlockAudio();
     if(!ZONES[activeZone]) return;                // 双保险：非白名单分区不响应
     if(voiceState.key === key && voiceState.status === 'playing'){ pausePlayback(); return; }
     if(voiceState.key === key && voiceState.status === 'paused'){ resumePlayback(); return; }
@@ -24311,6 +24435,12 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     installSimplifyPrefetch();
     installAIProviderGuard();
     scan();
+    // 第一次触摸就解锁播放权限（不必等点到 🎧 那一下）——手势越早用掉越稳，
+    // 代价只是无声地播 0.35 秒静音，用户完全听不到。
+    try{
+      document.addEventListener('pointerdown', function(){ unlockAudio(); }, { once:true, capture:true, passive:true });
+      document.addEventListener('touchstart', function(){ unlockAudio(); }, { once:true, capture:true, passive:true });
+    }catch(e){}
     var content = document.getElementById('content');
     if(content && window.MutationObserver){
       new MutationObserver(function(){ scheduleScan(); }).observe(content, { childList:true, subtree:true });

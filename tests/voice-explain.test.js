@@ -124,14 +124,30 @@ function makeEnv(options = {}) {
   }
   FakeAudio.prototype.play = function () {
     this.played = true;
-    // 真实浏览器出声时会回调 onplaying（按钮就是在这一刻从「转圈」切「播放中」）
-    setTimeout(() => { if (typeof this.onplaying === 'function') this.onplaying(); }, 0);
+    // 模拟自动播放策略：用例把 win.__failPlay 设成 "NotAllowedError" 就能让「下一次真音频」被拒
+    if (this.src && /^blob:/.test(this.src) && win.__failPlay) {
+      const name = win.__failPlay;
+      win.__failPlay = null;
+      const e = new Error("blocked"); e.name = name;
+      return Promise.reject(e);
+    }
+    // 真实浏览器出声时会回调 onplaying（按钮就是在这一刻从「转圈」切「播放中」）。
+    // 注意：事件属于「当时那个音源」——换 src 之后上一段的 playing 事件不会再打过来，
+    // 所以这里把播放时的 src 和处理函数都记下来，避免静音解锁的迟到事件打到新音频上。
+    const playedSrc = this.src;
+    const h = this.onplaying;
+    setTimeout(() => {
+      if (typeof h === 'function' && this.src === playedSrc) h();
+    }, 0);
     return Promise.resolve();
   };
   FakeAudio.prototype.pause = function () { this.paused = true; };
   FakeAudio.prototype.load = function () {};
   FakeAudio.prototype.removeAttribute = function () { this.src = ''; };
   win.Audio = FakeAudio;
+
+  // 点 🎧 时会先播一段静音 WAV 解锁播放权限，它也走 FakeAudio —— 断言只看真正带 blob 地址的那次播放
+  win.__blobPlays = () => calls.audio.filter((a) => /^blob:/.test(String(a.src || "")));
 
   // 三路 fetch 必须区分开：
   //   · AI 流式改写（body 带 stream:true）→ options.streamFetch，默认失败（退回 requestAI 桩）
@@ -391,7 +407,7 @@ test('Edge TTS 失败（网络不通）→ 停住 + 提示，绝不退回浏览�
   await waitFor(() => calls.warn.some((w) => /合成失败，已停止/.test(w)));
 
   assert.equal(calls.speak.length, 0, '不许退回浏览器语音');
-  assert.equal(calls.audio.length, 0);
+  assert.equal(win.__blobPlays().length, 0, "失败时不该播放任何音频");
   assert.ok(calls.toast.some((t) => /合成失败/.test(t) && /不会再用浏览器语音/.test(t)), JSON.stringify(calls.toast));
   assert.equal(win.qzVoice._state.status, 'idle', '失败后按钮要归位，不能一直转圈');
 });
@@ -411,7 +427,7 @@ test('Edge TTS 返回非音频 → 同样停住，不退回浏览器语音', asy
   btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
   await waitFor(() => calls.warn.some((w) => /不是音频/.test(w)));
   assert.equal(calls.speak.length, 0);
-  assert.equal(calls.audio.length, 0);
+  assert.equal(win.__blobPlays().length, 0, "失败时不该播放任何音频");
   assert.equal(win.qzVoice._state.status, 'idle');
 });
 
@@ -428,8 +444,8 @@ test('Edge TTS 成功 → 用 Audio 播放返回的音频 blob，不走浏览器
   win.qzVoice.config.provider = 'edge';
   win.qzVoice.config.edgeUrl = 'https://ok.workers.dev/tts';
   btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
-  await waitFor(() => calls.audio.length === 1);
-  assert.equal(calls.audio[0].src, 'blob:test/40960');
+  await waitFor(() => win.__blobPlays().length === 1);
+  assert.equal(win.__blobPlays()[0].src, 'blob:test/40960');
   assert.equal(calls.speak.length, 0, 'Edge 成功时不应再用浏览器语音');
   const body = JSON.parse(calls.fetch[0].init.body);
   assert.equal(body.voice, 'zh-CN-XiaoxiaoNeural');
@@ -490,7 +506,7 @@ test('Edge TTS 首次请求失败（CORS 预检被拒）→ 自动换 text/plain
   win.qzVoice.config.provider = 'edge';
   win.qzVoice.config.edgeUrl = 'https://naive.workers.dev/tts';
   btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
-  await waitFor(() => calls.audio.length === 1);
+  await waitFor(() => win.__blobPlays().length === 1);
   assert.equal(n, 2, '第一次失败后应重试一次');
   assert.equal(calls.fetch[1].init.headers['Content-Type'], 'text/plain;charset=UTF-8');
   assert.equal(calls.speak.length, 0, '重试成功就不该再降级到浏览器语音');
@@ -670,7 +686,7 @@ test('火山：填 API Key → 走 ?api_key= + X-Api-Resource-Id，base64 拼成
   win.qzVoice.config.volcVoice = 'zh_female_vv_uranus_bigtts';
   win.qzVoice.config.volcResourceId = 'seed-tts-2.0';
   win.qzVoice.speak('这道题考的是转折关系。').catch(() => {});
-  await waitFor(() => calls.audio.length === 1);
+  await waitFor(() => win.__blobPlays().length === 1);
 
   const req = calls.fetch[0];
   assert.match(req.url, /^https:\/\/openspeech\.bytedance\.com\/api\/v3\/tts\/unidirectional\?api_key=sk-test-key$/);
@@ -680,7 +696,7 @@ test('火山：填 API Key → 走 ?api_key= + X-Api-Resource-Id，base64 拼成
   assert.equal(body.req_params.text, '这道题考的是转折关系。');
   assert.equal(body.req_params.speaker, 'zh_female_vv_uranus_bigtts');
   assert.equal(body.req_params.audio_params.format, 'mp3');
-  assert.equal(calls.audio[0].src, 'blob:test/7', '两段 base64 应拼成 4+3 字节');
+  assert.equal(win.__blobPlays()[0].src, 'blob:test/7', '两段 base64 应拼成 4+3 字节');
   assert.equal(calls.speak.length, 0, '火山成功时不应再用浏览器语音');
 });
 
@@ -698,7 +714,7 @@ test('火山：旧版 AppID + Access Token → 走 X-Api-App-Key / X-Api-Access-
   win.qzVoice.config.volcAppId = '2556397526';
   win.qzVoice.config.volcToken = 'tok';
   win.qzVoice.speak('旧版也能用。').catch(() => {});
-  await waitFor(() => calls.audio.length === 1);
+  await waitFor(() => win.__blobPlays().length === 1);
 
   const req = calls.fetch[0];
   assert.equal(req.url.indexOf('?'), -1, '旧版鉴权不需要 query');
@@ -739,7 +755,7 @@ test('火山：返回 401 + Invalid X-Api-Key → 停住 + 提示，不退回浏
   btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
   await waitFor(() => calls.toast.length > 0);
 
-  assert.equal(calls.audio.length, 0);
+  assert.equal(win.__blobPlays().length, 0, "失败时不该播放任何音频");
   assert.equal(calls.speak.length, 0, '不许退回浏览器语音');
   assert.ok(calls.warn.some((w) => /Invalid X-Api-Key/.test(w)), JSON.stringify(calls.warn));
   assert.ok(calls.toast.some((t) => /合成失败/.test(t)));
@@ -770,6 +786,53 @@ test('等待进度：环画在 🎧 按钮上（不再弹屏幕中间的卡片�
   assert.ok(later < now, '应继续爬升：' + now + ' → ' + later);
 });
 
+test('点 🎧 先播静音片段解锁播放权限，且全程只用一个 <audio>', async () => {
+  const { win, calls } = makeEnv({ streamFetch: () => new Promise(() => {}) });
+  addAttemptsAndCopy(win, true);
+  const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+
+  assert.equal(calls.audio.length, 1, '手势里应先建一个 <audio> 并播静音片段');
+  assert.match(String(calls.audio[0].src), /^data:audio\/wav;base64,/, '解锁用的是静音 WAV');
+  assert.equal(calls.audio[0].played, true, '解锁必须真的 play() 一次');
+
+  // 再点（loading → 停止）→ 不能重新 new 一个元素，否则新的元素没被手势解锁
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  assert.equal(calls.audio.length, 1, '整个应用只应有一个 <audio>（解锁状态绑在元素上）');
+});
+
+test('播放被系统拦截（NotAllowedError）→ 不误报合成失败，按钮变 ▶ 再点就播', async () => {
+  const { win, calls } = makeEnv({
+    fetch: () => Promise.resolve({
+      ok: true,
+      headers: { get: () => 'audio/mpeg' },
+      blob: () => Promise.resolve({ size: 40960 })
+    })
+  });
+  addAttemptsAndCopy(win, true);
+  const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
+  win.qzVoice.config.provider = 'edge';
+  win.qzVoice.config.edgeUrl = 'https://ok.workers.dev/tts';
+  win.__failPlay = 'NotAllowedError';            // 合成成功、但 play() 被自动播放策略拒掉
+
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await waitFor(() => win.qzVoice._state.status === 'paused');
+
+  assert.ok(calls.toast.some((t) => /系统拦了自动播放/.test(t)), JSON.stringify(calls.toast));
+  assert.ok(!calls.toast.some((t) => /合成失败/.test(t)), '这不是合成失败，别吓人');
+  assert.equal(calls.speak.length, 0, '仍然不许退回浏览器语音');
+
+  const ttsCalls = () => calls.fetch.filter((f) => /workers\.dev/.test(f.url)).length;
+  assert.equal(ttsCalls(), 1);
+
+  // 用户再点一下（这一下是真正的手势）→ 直接播已经合成好的音频，不再请求 TTS
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await waitFor(() => win.qzVoice._state.status === 'playing');
+  assert.equal(ttsCalls(), 1, '续播不该重新合成');
+  assert.equal(win.__blobPlays().length, 1);
+});
+
 test('音频缓存命中 → 直接播，连 TTS 都不请求', async () => {
   const env = makeEnvWithQuestions({ provider: 'edge' });
   const { win, calls } = env;
@@ -782,11 +845,11 @@ test('音频缓存命中 → 直接播，连 TTS 都不请求', async () => {
   addAttemptsAndCopy(win, true);
   const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
   btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
-  await waitFor(() => calls.audio.length === 1);
+  await waitFor(() => win.__blobPlays().length === 1);
 
   assert.equal(calls.fetch.length, 0, '命中音频缓存时不该再请求 TTS');
   assert.equal(calls.speak.length, 0, '更不该退回浏览器语音');
-  assert.equal(calls.audio[0].src, 'blob:test/4096');
+  assert.equal(win.__blobPlays()[0].src, 'blob:test/4096');
 });
 
 test('后台预生成：听完一题就在后台备好后面 N 题（不发声、不改状态）', async () => {
@@ -870,7 +933,7 @@ test('流式改写 + 云端引擎 → 用所选引擎合成，不再偷偷用浏
   win.qzVoice.config.edgeUrl = 'https://ok.workers.dev/tts';
   btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
 
-  await waitFor(() => calls.audio.length >= 1);
+  await waitFor(() => win.__blobPlays().length >= 1);
   assert.equal(calls.speak.length, 0, '选了 Edge 就不能再用 speechSynthesis');
   assert.match(calls.fetch[0].url, /workers\.dev\/tts$/);
   const body = JSON.parse(calls.fetch[0].init.body);
