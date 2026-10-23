@@ -5399,7 +5399,9 @@ async function assertAnsweredStateReadyForBodyRelease(){
 //   一个 file 一条记录、可独立 read/write/delete/replace ⇒ 不存在「meta:all 巨型对象」。
 // ============================================================
 const META_PREFIX = 'meta:';
-const META_SCHEMA_VERSION = 1;
+// [2026-10-23] 2：年份口径改为主年份（覆盖「2026下半年…」这类无「年」字写法），
+// 旧 meta 里的 y 字段已过期，靠版本号把它们标成 versionMismatch，避免被误当成一致。
+const META_SCHEMA_VERSION = 2;
 // 单一开关：是否把受限搜索文本一起塞进 meta。默认 false（§十 的体积论证）。
 // Stage C 若决定「搜索也走 meta」，把这里翻成 true 再重建即可，其余代码无需改动。
 const META_INCLUDE_SEARCH_TEXT = false;
