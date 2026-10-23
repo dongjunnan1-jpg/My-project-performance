@@ -1,20 +1,3 @@
-/* ============================================================
-   [VOICE 2026-10-23] 🎧 讲解 —— AI 口语稿 + 可切换 TTS 播放层
-   ------------------------------------------------------------
-   设计原则（与 setupIncrementalFeatures / installSortRangePanel 一致）：
-     · 全部逻辑收在一个 IIFE 内，不改动任何现有业务函数体；
-     · 需要「拦截」的入口（goPage / switchZone / switchFile）一律用包装函数；
-     · 已有能力全部复用，不重复实现：
-       getOptions / getCorrectLetter / getAIHistory / aiConfig / AI_ENDPOINTS /
-       requestAI / getBestChineseVoice / stopSpeaking / filteredQuestions / escapeHtml
-   链路：
-     点 🎧 讲解 → IndexedDB 缓存 en_voice_explain_<qid>
-                → 无缓存：取「已有解析」（简化解析缓存 → item.solution）
-                → AI 改写成口语稿（只改表达，不重新解题）→ 写缓存 → speakWithTts()
-                → AI 失败 / 未配 Key → 直接播原解析兜底
-   播放层：voiceTtsConfig.provider = 'browser'(默认) | 'edge' | 'volc'(预留)
-           第三方失败 → console.warn + 自动降级 browser，不弹窗、不卡住
-   ============================================================ */
 (function installVoiceExplain(){
   'use strict';
   if(window.__qzVoiceExplainInstalled) return;
@@ -31,16 +14,20 @@
   var EDGE_TIMEOUT = 20000;                    // 第三方 TTS 硬超时：到点降级 browser
 
   /* ---------- 1. 配置 ---------- */
+  var VOLC_DEFAULT_VOICE = 'zh_female_vv_uranus_bigtts';   // 豆包语音合成 2.0 稳定女声
+  var VOLC_LEGACY_VOICE = 'zh_female_wanwanxiaohe_moon_bigtts';  // 旧默认（1.0 音色）
   var voiceTtsConfig = {
     provider: 'browser',                       // 'browser' | 'edge' | 'volc'
     edgeUrl: '',                               // Cloudflare Worker 网关地址（POST {text, voice} → audio/*）
     edgeVoice: 'zh-CN-XiaoxiaoNeural',         // Edge TTS 音色
-    volcAppId: '',                             // 火山引擎：预留
-    volcToken: '',                             // 火山引擎：预留
-    volcVoice: 'zh_female_wanwanxiaohe_moon_bigtts',
+    volcApiKey: '',                            // 火山：新版控制台 API Key —— 现在只填这一个就够了（不需要 AppID）
+    volcAppId: '',                             // 火山：旧版控制台 AppID（与 Access Token 配套，可选，留空即用新版 Key）
+    volcToken: '',                             // 火山：旧版控制台 Access Token
+    volcResourceId: 'seed-tts-2.0',            // 火山：模型版本 seed-tts-2.0 / seed-tts-1.0
+    volcVoice: VOLC_DEFAULT_VOICE,             // 火山：音色 speaker（必须与上面的版本匹配）
     prefetch: true                             // 简化解析后自动预生成语音稿（多一次 AI 调用，换秒播）
   };
-  var VOICE_CFG_FIELDS = ['edgeUrl', 'edgeVoice', 'volcAppId', 'volcToken', 'volcVoice'];
+  var VOICE_CFG_FIELDS = ['edgeUrl', 'edgeVoice', 'volcApiKey', 'volcAppId', 'volcToken', 'volcResourceId', 'volcVoice'];
 
   function loadVoiceTtsConfig(){
     try{
@@ -60,6 +47,10 @@
     catch(e){ console.warn('[VOICE] 保存语音配置失败：', e && (e.message || e)); }
   }
   loadVoiceTtsConfig();
+  // 迁移：旧版把默认音色写成 1.0 的 zh_female_wanwanxiaohe_moon_bigtts，配 seed-tts-2.0 会直接合成失败。
+  // 只有"还是那个旧默认值"时才升级，用户真填过的音色一律不动。
+  if(voiceTtsConfig.volcVoice === VOLC_LEGACY_VOICE) voiceTtsConfig.volcVoice = VOLC_DEFAULT_VOICE;
+  if(!voiceTtsConfig.volcResourceId) voiceTtsConfig.volcResourceId = 'seed-tts-2.0';
 
   /* ---------- 2. 图标（三态三份 SVG，尺寸/线宽与 .q-copy-btn 的剪贴板图标一致） ---------- */
   var SVG_ATTR = 'width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
@@ -265,15 +256,139 @@
     });
   }
 
-  // 火山引擎 HTTP 合成接口：本期只留契约与占位，不做真实调用（未拿到稳定网关地址，
-  // 且需要 appid+token+cluster 三件套签名，直接硬编码会误导使用者）。
-  // TODO(volc): 接入 https://openspeech.bytedance.com/api/v1/tts
-  //   POST headers: { Authorization: 'Bearer;' + token }
-  //   body: { app:{ appid, token, cluster:'volcano_tts' }, user:{uid:'qz'},
-  //           audio:{ voice_type: volcVoice, encoding:'mp3' }, request:{ reqid, text, operation:'query' } }
-  //   成功时 body.data 为 base64 音频 → 转 Blob 后交给 playObjectUrl()
+  /* ---------- 5c. 火山引擎（豆包语音）v3 单向流式 HTTP 合成 ----------
+     [VOICE 2026-10-23b] 控制台改版后**新版只要一个 API Key**（X-Api-Key），
+     不再需要 AppID / Access Token / cluster —— 旧版的 v1 接口（appid+token+cluster+Authorization: Bearer;）
+     已经不是推荐姿势，这里按新版 v3 实现，同时兼容旧版双头。
+
+     浏览器直连的三个硬约束（2026-10-23 实测，均已验证过）：
+       1) 网关回 `access-control-allow-origin: *`，跨域本身是放开的；
+       2) 但 preflight 的 allow-headers 白名单里**没有 X-Api-Key**（只有 X-Api-App-Key / X-Api-Access-Key /
+          X-Api-Request-Id / X-Api-Resource-Id …），请求头硬塞 X-Api-Key 会被浏览器直接拦死；
+          网关认 query 里的 api_key（不带任何凭据时报的就是 "app key not found in header or query"）,
+          所以新版 Key 走 `?api_key=`；Content-Type 在白名单里，预检能过；
+       3) 旧版 AppID + Access Token 正好对应白名单里的 X-Api-App-Key / X-Api-Access-Key —— 老配置照样能用。
+
+     响应是 HTTP chunked 的 JSON Lines：{code:0,data:'<base64 mp3>'} … 收尾 {code:20000000}。
+     这里把 base64 片段按顺序拼成 Blob 再交给 playObjectUrl()；任何异常都往上抛，
+     由 speakWithTts() 统一 console.warn + 降级浏览器语音。 */
+  var VOLC_URL = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
+  var VOLC_TIMEOUT = 20000;
+  var volcHinted = false;
+
+  function volcAuth(){
+    var key = String(voiceTtsConfig.volcApiKey || '').trim();
+    var appId = String(voiceTtsConfig.volcAppId || '').trim();
+    var token = String(voiceTtsConfig.volcToken || '').trim();
+    if(key) return { url: VOLC_URL + '?api_key=' + encodeURIComponent(key), headers: {} };
+    if(appId && token) return { url: VOLC_URL, headers: { 'X-Api-App-Key': appId, 'X-Api-Access-Key': token } };
+    return null;
+  }
+
+  function b64ToBytes(b64){
+    var bin;
+    try{ bin = window.atob(String(b64 || '')); }catch(e){ return null; }
+    var n = bin.length, out = new Uint8Array(n);
+    for(var i = 0; i < n; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  // 按「成对花括号」切 JSON 对象（不假设一行一个，兼容 text() 把多行粘在一起）
+  function parseVolcStream(raw){
+    var text = String(raw || ''), chunks = [], errMsg = '', i = 0;
+    while(i < text.length){
+      var start = text.indexOf('{', i);
+      if(start < 0) break;
+      var depth = 0, inStr = false, esc = false, end = -1;
+      for(var j = start; j < text.length; j++){
+        var ch = text.charAt(j);
+        if(inStr){
+          if(esc) esc = false;
+          else if(ch === '\\') esc = true;
+          else if(ch === '"') inStr = false;
+        }else if(ch === '"') inStr = true;
+        else if(ch === '{') depth++;
+        else if(ch === '}'){ depth--; if(depth === 0){ end = j; break; } }
+      }
+      if(end < 0) break;                       // 残包：丢弃，不冒泡
+      var obj = null;
+      try{ obj = JSON.parse(text.slice(start, end + 1)); }catch(e){ obj = null; }
+      i = end + 1;
+      if(!obj) continue;
+      var code = Number(obj.code != null ? obj.code : (obj.header && obj.header.code));
+      if(code && code !== 20000000){
+        errMsg = (obj.message || (obj.header && obj.header.message) || ('code ' + code));
+        continue;
+      }
+      if(typeof obj.data === 'string' && obj.data) chunks.push(obj.data);
+    }
+    return { chunks: chunks, error: errMsg };
+  }
+
   function speakVolc(text, token){
-    return Promise.reject(new Error('火山引擎 TTS 尚未接入（预留）'));
+    var auth = volcAuth();
+    if(!auth){
+      if(!volcHinted){
+        volcHinted = true;
+        toast('火山引擎还没填 API Key，先用浏览器语音');
+      }
+      return Promise.reject(new Error('火山引擎未配置 API Key（或旧版 AppID + Access Token）'));
+    }
+    if(typeof fetch !== 'function') return Promise.reject(new Error('当前环境不支持 fetch'));
+
+    var body = JSON.stringify({
+      user: { uid: 'qz-voice' },
+      req_params: {
+        text: String(text || ''),
+        speaker: String(voiceTtsConfig.volcVoice || '').trim() || VOLC_DEFAULT_VOICE,
+        audio_params: { format: 'mp3', sample_rate: 24000 }
+      }
+    });
+    var headers = {
+      'Content-Type': 'application/json',
+      'X-Api-Resource-Id': String(voiceTtsConfig.volcResourceId || '').trim() || 'seed-tts-2.0'
+    };
+    Object.keys(auth.headers).forEach(function(k){ headers[k] = auth.headers[k]; });
+
+    var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    var timer = 0;
+    if(ctrl) timer = setTimeout(function(){ try{ ctrl.abort(); }catch(e){} }, VOLC_TIMEOUT);
+
+    return fetch(auth.url, {
+      method: 'POST',
+      headers: headers,
+      body: body,
+      signal: ctrl ? ctrl.signal : undefined
+    }).then(function(resp){
+      if(!resp) throw new Error('火山引擎无响应');
+      return resp.text().then(function(raw){ return { resp: resp, raw: raw }; });
+    }).then(function(r){
+      if(timer) clearTimeout(timer);
+      var parsed = parseVolcStream(r.raw);
+      if(parsed.error) throw new Error('火山引擎返回错误：' + parsed.error);
+      if(!parsed.chunks.length) throw new Error('火山引擎没返回音频（HTTP ' + ((r.resp && r.resp.status) || '?') + '）');
+
+      var total = 0, i;
+      var parts = [];
+      for(i = 0; i < parsed.chunks.length; i++){
+        var bytes = b64ToBytes(parsed.chunks[i]);
+        if(bytes && bytes.length){ parts.push(bytes); total += bytes.length; }
+      }
+      if(!total) throw new Error('火山引擎音频解码失败');
+      var merged = new Uint8Array(total), offset = 0;
+      for(i = 0; i < parts.length; i++){ merged.set(parts[i], offset); offset += parts[i].length; }
+
+      var blob = new Blob([merged], { type: 'audio/mpeg' });
+      var objUrl = URL.createObjectURL(blob);
+      if(token !== playToken){                     // 期间切题 / 被叫停：丢弃，别抢麦
+        try{ URL.revokeObjectURL(objUrl); }catch(e){}
+        return 'canceled';
+      }
+      return playObjectUrl(objUrl);
+    }).catch(function(err){
+      if(timer) clearTimeout(timer);
+      throw err;
+    });
   }
 
   // 统一入口：按 provider 分发；第三方任何失败都 console.warn 后降级 browser（不弹窗、不打断）
@@ -849,6 +964,70 @@
     };
   });
 
+  /* ---------- 11b. 兜底：AI 面板最顶部那个「AI 服务商」下拉不能空着 ----------
+     [VOICE 2026-10-23b] 现象：面板打开时最顶上那格里什么都不显示（以前是有字的）。
+     两条独立成因，一起兜住：
+       ① 值层面：select.value 赋了个空串 / 不在 option 列表里的值 → 原生控件就是"空白框"。
+          这里校正成合法值，缺 option 就补一个同名 option。
+       ② 绘制层面（iOS Safari 上的真凶）：面板是 `position:fixed + transform:translate(-50%,-50%)`
+          居中、内部还能滚动；语音设置区把面板撑高之后开始出现滚动条，这个组合下原生 <select>
+          的文字会**不重绘**，只画出一个空框——数据明明是对的（同一份 aiConfig 的模型框能正常显示）。
+          修法见 installStyle：面板改成 inset:0 + margin:auto 居中（彻底不用 transform），
+          打开时再补一次强制重绘。 */
+  function ensureAIProviderSelected(){
+    var sel = document.getElementById('aiProvider');
+    if(!sel || !sel.options) return;
+
+    if(!sel.value){                                  // ① 值不合法 → 校正
+      var want = '';
+      try{ want = (typeof aiConfig !== 'undefined' && aiConfig && aiConfig.provider) ? String(aiConfig.provider) : ''; }catch(e){}
+      if(!want) want = 'deepseek';
+      var hit = false;
+      for(var i = 0; i < sel.options.length; i++){
+        if(sel.options[i].value === want){ hit = true; break; }
+      }
+      if(!hit){
+        var opt = document.createElement('option');
+        opt.value = want;
+        opt.textContent = want;
+        sel.appendChild(opt);
+      }
+      sel.value = want;
+    }
+
+    // ② 值对但可能"看不见"：文字色被主题配成和底色一致时强制回深色（只在真的看不见时才动手）
+    try{
+      var cs = window.getComputedStyle(sel);
+      if(cs && (cs.color === 'rgba(0, 0, 0, 0)' || cs.color === cs.backgroundColor)){
+        sel.style.color = '#1f2937';
+      }
+    }catch(e){}
+
+    repaintSelect(sel);                              // ③ iOS：强制重绘一次，把文字画出来
+  }
+  // 换掉 opacity 触发重绘：不是 clone（clone 会丢 change 监听和当前值），只是让合成层失效重建
+  function repaintSelect(el){
+    try{
+      el.style.opacity = '0.9999';
+      var done = function(){ el.style.opacity = ''; };
+      if(typeof requestAnimationFrame === 'function') requestAnimationFrame(function(){ requestAnimationFrame(done); });
+      else setTimeout(done, 16);
+    }catch(e){}
+  }
+  function installAIProviderGuard(){
+    if(typeof window.toggleAIPanel === 'function' && !window.toggleAIPanel.__qzVoiceWrapped){
+      var orig = window.toggleAIPanel;
+      var wrapped = function(){
+        var ret = orig.apply(this, arguments);
+        ensureAIProviderSelected();
+        return ret;
+      };
+      wrapped.__qzVoiceWrapped = true;
+      window.toggleAIPanel = wrapped;
+    }
+    ensureAIProviderSelected();
+  }
+
   /* ---------- 12. #aiPanel 增加「语音引擎」设置 ---------- */
   function engineLabel(){
     var p = voiceTtsConfig.provider;
@@ -864,7 +1043,12 @@
     if(volcBox) volcBox.style.display = p === 'volc' ? 'block' : 'none';
     var hint = panel.querySelector('#qzVoiceHint');
     if(hint){
-      var extra = p === 'edge' && !String(voiceTtsConfig.edgeUrl || '').trim() ? '（未填地址 → 自动用浏览器语音）' : '';
+      var extra = '';
+      if(p === 'edge' && !String(voiceTtsConfig.edgeUrl || '').trim()){
+        extra = '（未填地址 → 自动用浏览器语音）';
+      }else if(p === 'volc' && !volcAuth()){
+        extra = '（未填 API Key → 自动用浏览器语音）';
+      }
       hint.innerHTML = '当前引擎：' + escapeHtml(engineLabel()) + extra
         + '<br>第三方引擎失败会自动退回浏览器语音，不会中断播放。';
     }
@@ -888,10 +1072,27 @@
       +   '<input type="text" id="qzVoiceEdgeVoice" placeholder="zh-CN-XiaoxiaoNeural">'
       + '</div>'
       + '<div id="qzVoiceVolcBox" style="display:none;">'
-      +   '<label>火山 AppID（预留）</label>'
-      +   '<input type="text" id="qzVoiceVolcAppId" placeholder="尚未接入，占位">'
-      +   '<label>火山 Access Token（预留）</label>'
-      +   '<input type="password" id="qzVoiceVolcToken" placeholder="尚未接入，占位">'
+      +   '<label>火山 API Key（新版控制台）</label>'
+      +   '<input type="password" id="qzVoiceVolcKey" autocomplete="off" placeholder="控制台 → API Key 管理，只填这一个就够了">'
+      +   '<label>音色 speaker</label>'
+      +   '<input type="text" id="qzVoiceVolcVoice" list="qzVoiceVolcVoiceList" placeholder="' + VOLC_DEFAULT_VOICE + '">'
+      +   '<datalist id="qzVoiceVolcVoiceList">'
+      +     '<option value="zh_female_vv_uranus_bigtts">2.0 稳重女声（推荐）</option>'
+      +     '<option value="zh_female_xiaohe_uranus_bigtts">2.0 亲和女声</option>'
+      +     '<option value="zh_male_m191_uranus_bigtts">2.0 沉稳男声</option>'
+      +     '<option value="zh_female_wanwanxiaohe_moon_bigtts">1.0 湾湾小何（需选 1.0 版本）</option>'
+      +   '</datalist>'
+      +   '<label>模型版本</label>'
+      +   '<select id="qzVoiceVolcRes">'
+      +     '<option value="seed-tts-2.0">豆包语音合成 2.0（seed-tts-2.0）</option>'
+      +     '<option value="seed-tts-1.0">豆包语音合成 1.0（seed-tts-1.0）</option>'
+      +   '</select>'
+      +   '<details class="qz-voice-legacy"><summary>旧版控制台（AppID + Access Token，可选）</summary>'
+      +     '<label>AppID</label>'
+      +     '<input type="text" id="qzVoiceVolcAppId" placeholder="只有旧版控制台才有">'
+      +     '<label>Access Token</label>'
+      +     '<input type="password" id="qzVoiceVolcToken" autocomplete="off" placeholder="只有旧版控制台才有">'
+      +   '</details>'
       + '</div>'
       + '<label style="display:flex;align-items:center;gap:6px;font-size:12px;">'
       +   '<input type="checkbox" id="qzVoicePrefetch" style="width:auto;margin:0;">'
@@ -904,12 +1105,18 @@
     var sel = box.querySelector('#qzVoiceProvider');
     var edgeUrl = box.querySelector('#qzVoiceEdgeUrl');
     var edgeVoice = box.querySelector('#qzVoiceEdgeVoice');
+    var volcKey = box.querySelector('#qzVoiceVolcKey');
+    var volcVoiceEl = box.querySelector('#qzVoiceVolcVoice');
+    var volcRes = box.querySelector('#qzVoiceVolcRes');
     var volcId = box.querySelector('#qzVoiceVolcAppId');
     var volcToken = box.querySelector('#qzVoiceVolcToken');
     var prefetchBox = box.querySelector('#qzVoicePrefetch');
     sel.value = voiceTtsConfig.provider;
     edgeUrl.value = voiceTtsConfig.edgeUrl || '';
     edgeVoice.value = voiceTtsConfig.edgeVoice || '';
+    if(volcKey) volcKey.value = voiceTtsConfig.volcApiKey || '';
+    if(volcVoiceEl) volcVoiceEl.value = voiceTtsConfig.volcVoice || VOLC_DEFAULT_VOICE;
+    if(volcRes) volcRes.value = voiceTtsConfig.volcResourceId || 'seed-tts-2.0';
     volcId.value = voiceTtsConfig.volcAppId || '';
     volcToken.value = voiceTtsConfig.volcToken || '';
     if(prefetchBox) prefetchBox.checked = voiceTtsConfig.prefetch !== false;
@@ -918,6 +1125,9 @@
       voiceTtsConfig.provider = (sel.value === 'edge' || sel.value === 'volc') ? sel.value : 'browser';
       voiceTtsConfig.edgeUrl = String(edgeUrl.value || '').trim();
       voiceTtsConfig.edgeVoice = String(edgeVoice.value || '').trim() || 'zh-CN-XiaoxiaoNeural';
+      if(volcKey) voiceTtsConfig.volcApiKey = String(volcKey.value || '').trim();
+      if(volcVoiceEl) voiceTtsConfig.volcVoice = String(volcVoiceEl.value || '').trim() || VOLC_DEFAULT_VOICE;
+      if(volcRes) voiceTtsConfig.volcResourceId = String(volcRes.value || '').trim() || 'seed-tts-2.0';
       voiceTtsConfig.volcAppId = String(volcId.value || '').trim();
       voiceTtsConfig.volcToken = String(volcToken.value || '').trim();
       if(prefetchBox) voiceTtsConfig.prefetch = !!prefetchBox.checked;
@@ -925,7 +1135,8 @@
       syncEngineFields();
     }
     sel.addEventListener('change', function(){ commit(); voiceStop(); });
-    [edgeUrl, edgeVoice, volcId, volcToken].forEach(function(el){
+    [edgeUrl, edgeVoice, volcKey, volcVoiceEl, volcRes, volcId, volcToken].forEach(function(el){
+      if(!el) return;
       el.addEventListener('change', commit);
       el.addEventListener('blur', commit);
     });
@@ -994,7 +1205,16 @@
       // 🎧 + 📋 的不可断行小组：只负责「换行时不被拆开」，间距与 .q-title 的 gap 一致
       '.q-title .q-title-actions { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }',
       '.qz-voice-settings { display: flex; flex-direction: column; gap: 6px; }',
-      '.qz-voice-settings #qzVoiceEdgeBox, .qz-voice-settings #qzVoiceVolcBox { display: flex; flex-direction: column; gap: 6px; }'
+      '.qz-voice-settings select { width: 100%; box-sizing: border-box; }',
+      '.qz-voice-settings #qzVoiceEdgeBox, .qz-voice-settings #qzVoiceVolcBox { display: flex; flex-direction: column; gap: 6px; }',
+      // 旧版控制台鉴权折叠区：收起时不占地方，展开时和其它字段同样竖排
+      '.qz-voice-settings details.qz-voice-legacy > summary { cursor: pointer; font-size: 11px; color: #64748b; padding: 2px 0; }',
+      '.qz-voice-settings details.qz-voice-legacy[open] { display: flex; flex-direction: column; gap: 6px; }',
+      // 下拉框文字过长时用省略号，不要整行被裁掉
+      '#aiPanel select { text-overflow: ellipsis; }',
+      // iOS Safari 的坑：fixed + transform 居中 + 面板内部滚动 时，原生 <select> 的文字不重绘（只剩空框）。
+      // 面板改为 inset:0 + margin:auto 居中，不再使用 transform（纯视觉等效，行为不变）。
+      '#aiPanel { transform: none !important; top: 0; left: 0; right: 0; bottom: 0; margin: auto; height: fit-content; max-height: 86vh; }'
     ].join('\n');
     document.head.appendChild(style);
   }
@@ -1004,6 +1224,7 @@
     installStyle();
     installVoiceSettingsPanel();
     installSimplifyPrefetch();
+    installAIProviderGuard();
     scan();
     var content = document.getElementById('content');
     if(content && window.MutationObserver){
@@ -1012,6 +1233,7 @@
     // #aiPanel 若被后续代码重建，重装一次设置区（低频兜底）
     setInterval(function(){
       if(!document.getElementById('qzVoiceProvider')) installVoiceSettingsPanel();
+      installAIProviderGuard();          // 面板重开后「AI 服务商」也不许空着
     }, 5000);
   }
 

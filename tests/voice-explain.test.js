@@ -564,3 +564,98 @@ test('预生成：点完「AI 简化解析」就把口语稿写好，点 🎧 �
   assert.equal(calls.speak.length, 0, '预生成不应出声');
   assert.equal(typeof win.qzVoice._prefetch, 'function');
 });
+
+/* ---------- 火山引擎（豆包语音）v3 ----------
+   新版控制台只给一个 API Key，浏览器又不能用 X-Api-Key 请求头（预检白名单里没有它），
+   所以实现上把 Key 放到 query（api_key=…）；旧版 AppID + Access Token 走允许的双头。
+   响应是 JSON Lines，每行 {code:0,data:'<base64 mp3>'}，最后一帧 code=20000000。 */
+
+function volcStream(chunksB64) {
+  const lines = chunksB64.map((d) => JSON.stringify({ code: 0, data: d }));
+  lines.push(JSON.stringify({ code: 20000000, message: 'OK' }));
+  return lines.join('\n') + '\n';
+}
+
+test('火山：填 API Key → 走 ?api_key= + X-Api-Resource-Id，base64 拼成 mp3 播放', async () => {
+  const a = Buffer.from([0xff, 0xfb, 0x90, 0x64]).toString('base64');
+  const b = Buffer.from([0x11, 0x22, 0x33]).toString('base64');
+  const { win, calls } = makeEnv({
+    fetch: () => Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      text: () => Promise.resolve(volcStream([a, b]))
+    })
+  });
+  win.qzVoice.config.provider = 'volc';
+  win.qzVoice.config.volcApiKey = 'sk-test-key';
+  win.qzVoice.config.volcVoice = 'zh_female_vv_uranus_bigtts';
+  win.qzVoice.config.volcResourceId = 'seed-tts-2.0';
+  win.qzVoice.speak('这道题考的是转折关系。').catch(() => {});
+  await waitFor(() => calls.audio.length === 1);
+
+  const req = calls.fetch[0];
+  assert.match(req.url, /^https:\/\/openspeech\.bytedance\.com\/api\/v3\/tts\/unidirectional\?api_key=sk-test-key$/);
+  assert.equal(req.init.headers['X-Api-Resource-Id'], 'seed-tts-2.0');
+  assert.equal(req.init.headers['X-Api-Key'], undefined, '浏览器不能发 X-Api-Key（不在 CORS 白名单里）');
+  const body = JSON.parse(req.init.body);
+  assert.equal(body.req_params.text, '这道题考的是转折关系。');
+  assert.equal(body.req_params.speaker, 'zh_female_vv_uranus_bigtts');
+  assert.equal(body.req_params.audio_params.format, 'mp3');
+  assert.equal(calls.audio[0].src, 'blob:test/7', '两段 base64 应拼成 4+3 字节');
+  assert.equal(calls.speak.length, 0, '火山成功时不应再用浏览器语音');
+});
+
+test('火山：旧版 AppID + Access Token → 走 X-Api-App-Key / X-Api-Access-Key 双头，不带 query', async () => {
+  const { win, calls } = makeEnv({
+    fetch: () => Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      text: () => Promise.resolve(volcStream([Buffer.from([1, 2]).toString('base64')]))
+    })
+  });
+  win.qzVoice.config.provider = 'volc';
+  win.qzVoice.config.volcApiKey = '';
+  win.qzVoice.config.volcAppId = '2556397526';
+  win.qzVoice.config.volcToken = 'tok';
+  win.qzVoice.speak('旧版也能用。').catch(() => {});
+  await waitFor(() => calls.audio.length === 1);
+
+  const req = calls.fetch[0];
+  assert.equal(req.url.indexOf('?'), -1, '旧版鉴权不需要 query');
+  assert.equal(req.init.headers['X-Api-App-Key'], '2556397526');
+  assert.equal(req.init.headers['X-Api-Access-Key'], 'tok');
+});
+
+test('火山：完全没填凭据 → 提示一次并降级浏览器语音，不发请求', async () => {
+  const { win, calls } = makeEnv();
+  win.qzVoice.config.provider = 'volc';
+  win.qzVoice.config.volcApiKey = '';
+  win.qzVoice.config.volcAppId = '';
+  win.qzVoice.config.volcToken = '';
+  win.qzVoice.speak('没有 Key 就退回自带语音。').catch(() => {});
+  await waitFor(() => calls.speak.length === 1);
+
+  assert.equal(calls.fetch.length, 0, '没凭据不该发请求');
+  assert.ok(calls.toast.some((t) => /火山引擎还没填 API Key/.test(t)), JSON.stringify(calls.toast));
+  assert.ok(calls.warn.some((w) => /火山引擎 TTS 失败/.test(w)));
+});
+
+test('火山：返回 401 + Invalid X-Api-Key → 只 warn 并降级浏览器语音', async () => {
+  const { win, calls } = makeEnv({
+    fetch: () => Promise.resolve({
+      ok: false,
+      status: 401,
+      headers: { get: () => 'application/json' },
+      text: () => Promise.resolve('{"header":{"code":45000010,"message":"Invalid X-Api-Key"}}')
+    })
+  });
+  win.qzVoice.config.provider = 'volc';
+  win.qzVoice.config.volcApiKey = 'bad-key';
+  win.qzVoice.speak('Key 不对就别出声。').catch(() => {});
+  await waitFor(() => calls.speak.length === 1);
+
+  assert.equal(calls.audio.length, 0);
+  assert.ok(calls.warn.some((w) => /Invalid X-Api-Key/.test(w)), JSON.stringify(calls.warn));
+});
