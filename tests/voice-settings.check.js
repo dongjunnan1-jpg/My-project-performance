@@ -50,6 +50,7 @@ const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
       const sel = document.getElementById('aiProvider');
       const sb = sel.getBoundingClientRect();
       const cs = getComputedStyle(sel);
+      const label = document.querySelector('.qz-provider-wrap > .qz-provider-label');
       return {
         panelBox: { top: +b.top.toFixed(1), h: +b.height.toFixed(1) },
         centeredOffset: +Math.abs(b.top - (window.innerHeight - b.height) / 2).toFixed(1),
@@ -59,7 +60,10 @@ const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
         selectText: sel.options[sel.selectedIndex] && sel.options[sel.selectedIndex].textContent,
         selectVisible: sb.height > 20 && sb.width > 100,
         selectColor: cs.color,
-        selectBg: cs.backgroundColor
+        selectBg: cs.backgroundColor,
+        // 自绘文字层：滚动起来之后原生 select 可能一个字都不画，所以必须有一层自己的文字
+        labelText: label ? label.textContent : '(缺失)',
+        labelVisible: !!(label && label.getBoundingClientRect().height > 10)
       };
     });
     await page.screenshot({ path: '/tmp/shot-panel-375.png' });

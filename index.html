@@ -23593,12 +23593,10 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       sel.value = want;
     }
 
-    // ③ 值对但可能"看不见"：文字色被主题配成和底色一致时强制回深色（只在真的看不见时才动手）
+    // ③ 值对但文字可能"看不见"：自绘层（见 decorateAIProviderSelect）会处理配色，这里只兜原生部分
     try{
       var cs = window.getComputedStyle(sel);
-      if(cs && (cs.color === 'rgba(0, 0, 0, 0)' || cs.color === cs.backgroundColor)){
-        sel.style.color = '#1f2937';
-      }
+      if(cs && cs.backgroundColor === 'rgba(0, 0, 0, 0)') sel.style.backgroundColor = '#fff';
     }catch(e){}
 
     repaintSelect(sel);                              // ④ 强制重绘，防 WebView 残影
@@ -23612,18 +23610,66 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       else setTimeout(done, 16);
     }catch(e){}
   }
+  /* ---------- 11c. 「AI 服务商」自绘文字层 ----------
+     [VOICE 2026-10-23d] 用户实测：语音引擎选「浏览器自带」时，顶部服务商正常显示 DeepSeek；
+     一切到「火山引擎」（面板变高、出现内部滚动），顶部那格就又空了。
+     DOM 层是对的（selectedIndex 有值、value 正常、模型框也对），所以这是**原生控件绘制**
+     层面的问题：这个 <select> 在不滚动时能画字，一滚动就不画了（同一份代码在桌面 Chrome 上
+     永远正常，抓不到，只能绕开）。
+     绕法：不再依赖浏览器给 <select> 画文字 —— 把原生文字设为透明，自己在同一位置叠一层
+     <span> 显示当前所选服务商；选值逻辑、下拉列表完全不变（option 单独设了不透明色）。
+     这样无论原生控件画不画，框里总有字。 */
+  function decorateAIProviderSelect(){
+    var sel = document.getElementById('aiProvider');
+    if(!sel || !sel.parentNode) return;
+    if(sel.__qzDecorated){
+      if(sel.__qzSyncLabel) sel.__qzSyncLabel();
+      return;
+    }
+    var wrap = document.createElement('div');
+    wrap.className = 'qz-provider-wrap';
+    sel.parentNode.insertBefore(wrap, sel);
+    wrap.appendChild(sel);
+
+    var label = document.createElement('span');
+    label.className = 'qz-provider-label';
+    label.setAttribute('aria-hidden', 'true');    // 纯视觉替身：无障碍树里只留原生 select，避免读两遍
+    wrap.appendChild(label);
+
+    function sync(){
+      var opt = sel.options[sel.selectedIndex];
+      label.textContent = opt ? String(opt.textContent || '').replace(/（未识别，请重选）$/, '') : '';
+      // 主题把文字色配成和底色一样时（极端皮肤），自绘层也要能读
+      try{
+        var lcs = window.getComputedStyle(label);
+        var bg = window.getComputedStyle(sel).backgroundColor;
+        if(lcs && (lcs.color === 'rgba(0, 0, 0, 0)' || lcs.color === bg)) label.style.color = '#1f2937';
+      }catch(e){}
+    }
+    sel.addEventListener('change', sync);
+    sel.addEventListener('input', sync);
+    try{
+      new MutationObserver(sync).observe(sel, { childList: true, subtree: true, attributes: true, attributeFilter: ['selected', 'value'] });
+    }catch(e){}
+    sel.__qzSyncLabel = sync;
+    sel.__qzDecorated = true;
+    sync();
+  }
+
   function installAIProviderGuard(){
     if(typeof window.toggleAIPanel === 'function' && !window.toggleAIPanel.__qzVoiceWrapped){
       var orig = window.toggleAIPanel;
       var wrapped = function(){
         var ret = orig.apply(this, arguments);
         ensureAIProviderSelected();
+        decorateAIProviderSelect();
         return ret;
       };
       wrapped.__qzVoiceWrapped = true;
       window.toggleAIPanel = wrapped;
     }
     ensureAIProviderSelected();
+    decorateAIProviderSelect();
   }
 
   /* ---------- 12. #aiPanel 增加「语音引擎」设置 ---------- */
@@ -23810,6 +23856,12 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       '.qz-voice-settings details.qz-voice-legacy[open] { display: flex; flex-direction: column; gap: 6px; }',
       // 下拉框文字过长时用省略号，不要整行被裁掉
       '#aiPanel select { text-overflow: ellipsis; }',
+      // 「AI 服务商」自绘文字层：原生 <select> 在不滚动时能画字、一滚动就不画（手机端实测），
+      // 所以把原生文字设透明，用同位置的 <span> 显示当前值；option 单独给回不透明色，保证下拉列表可读。
+      '.qz-provider-wrap { position: relative; display: block; width: 100%; }',
+      '.qz-provider-wrap > select { width: 100%; box-sizing: border-box; color: transparent !important; -webkit-text-fill-color: transparent !important; }',
+      '.qz-provider-wrap > select > option { color: #1f2937; }',
+      '.qz-provider-wrap > .qz-provider-label { position: absolute; left: 12px; right: 30px; top: 0; bottom: 0; display: flex; align-items: center; font-size: 13px; color: var(--deep, #2c6b9e); pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }',
       // iOS Safari 的坑：fixed + transform 居中 + 面板内部滚动 时，原生 <select> 的文字不重绘（只剩空框）。
       // 面板改为 inset:0 + margin:auto 居中，不再使用 transform（纯视觉等效，行为不变）。
       '#aiPanel { transform: none !important; top: 0; left: 0; right: 0; bottom: 0; margin: auto; height: fit-content; max-height: 86vh; }'
