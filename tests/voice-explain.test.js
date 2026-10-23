@@ -104,7 +104,11 @@ function makeEnv(options = {}) {
     speaking: false,
     pending: false,
     getVoices: function () { return [{ name: 'Ting-Ting', lang: 'zh-CN' }]; },
-    speak: function (u) { calls.speak.push({ text: u.text, voice: u.voice }); },
+    speak: function (u) {
+      calls.speak.push({ text: u.text, voice: u.voice });
+      // 真实浏览器会在真正出声时回调 onstart（按钮就是在这一刻从「转圈」切「播放中」）
+      if (typeof u.onstart === 'function') setTimeout(function () { u.onstart(); }, 0);
+    },
     cancel: function () { calls.cancel += 1; },
     pause: function () { calls.pause += 1; },
     resume: function () { calls.resume += 1; }
@@ -118,7 +122,12 @@ function makeEnv(options = {}) {
     this.srcs = [src];
     calls.audio.push(this);
   }
-  FakeAudio.prototype.play = function () { this.played = true; return Promise.resolve(); };
+  FakeAudio.prototype.play = function () {
+    this.played = true;
+    // 真实浏览器出声时会回调 onplaying（按钮就是在这一刻从「转圈」切「播放中」）
+    setTimeout(() => { if (typeof this.onplaying === 'function') this.onplaying(); }, 0);
+    return Promise.resolve();
+  };
   FakeAudio.prototype.pause = function () { this.paused = true; };
   FakeAudio.prototype.load = function () {};
   FakeAudio.prototype.removeAttribute = function () { this.src = ''; };
@@ -166,6 +175,71 @@ function titleOrder(win) {
   };
   walk(title);
   return flat;
+}
+
+// 内存版 IndexedDB：够用来验证「文字稿 / 音频 Blob」两条缓存的读写与清理。
+// 支持 get / put / delete / openCursor（pruneAudioCache 会遍历 key）。
+function installFakeIdb(win, seed = {}) {
+  const store = Object.assign({}, seed);   // 直接把这个对象交给用例，方便预置/检查
+  win.indexedDB = {
+    open() {
+      const req = {};
+      setTimeout(() => {
+        req.result = {
+          objectStoreNames: { contains: () => true },
+          transaction() {
+            const tx = {};
+            // 真实 IndexedDB 是「事务提交后」才 oncomplete，缓存层就等这个回调，所以这里要补上
+            const commit = () => setTimeout(() => { if (typeof tx.oncomplete === 'function') tx.oncomplete(); }, 0);
+            tx.objectStore = () => ({
+              get(k) {
+                const r = {};
+                setTimeout(() => { r.result = store[k]; r.onsuccess && r.onsuccess(); }, 0);
+                return r;
+              },
+              put(v, k) { store[k] = v; commit(); },
+              delete(k) { delete store[k]; commit(); },
+              openCursor() {
+                const keys = Object.keys(store).sort();
+                let i = -1;
+                const cur = {};
+                const step = () => {
+                  i += 1;
+                  if (i >= keys.length) { cur.result = null; cur.onsuccess && cur.onsuccess({ target: cur }); return; }
+                  cur.result = { key: keys[i], value: store[keys[i]], continue: () => setTimeout(step, 0) };
+                  cur.onsuccess && cur.onsuccess({ target: cur });
+                };
+                setTimeout(step, 0);
+                return cur;
+              }
+            });
+            tx.oncomplete = null;
+            return tx;
+          }
+        };
+        req.onsuccess && req.onsuccess({ target: { result: req.result } });
+      }, 0);
+      return req;
+    }
+  };
+  return store;
+}
+
+// 带多条题目 + 假 DB 的环境，供「后台预生成」类用例复用
+function makeEnvWithQuestions(options = {}, count = 4) {
+  const env = makeEnv(options);
+  const list = [];
+  for (let i = 0; i < count; i += 1) {
+    list.push({
+      _key: 'f1_q' + i,
+      content: '第 ' + (i + 1) + ' 题：以下说法正确的是（ ）',
+      solution: '【正确答案】A。第 ' + (i + 1) + ' 题解析：甲项正确，乙项错误。'
+    });
+  }
+  env.win.filteredQuestions = list;
+  const store = installFakeIdb(env.win);
+  env.store = store;
+  return env;
 }
 
 function addAttemptsAndCopy(win, withCopy = true) {
@@ -671,7 +745,7 @@ test('火山：返回 401 + Invalid X-Api-Key → 停住 + 提示，不退回浏
   assert.ok(calls.toast.some((t) => /合成失败/.test(t)));
 });
 
-test('等待进度条：点开 400ms 还没出声就露出，带动画和已等秒数', async () => {
+test('等待进度：环画在 🎧 按钮上（不再弹屏幕中间的卡片），AI 迟迟不出字就一直走', async () => {
   const { win } = makeEnv({
     streamFetch: () => new Promise(() => {})     // 永不出字：模拟"等得久"
   });
@@ -679,22 +753,86 @@ test('等待进度条：点开 400ms 还没出声就露出，带动画和已等�
   const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
   btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
 
-  const el = win.document.querySelector('.qz-voice-progress');
-  assert.ok(el, '应插入等待进度条');
-  const text = el.querySelector('.qz-voice-progress-text');
-  const bar = el.querySelector('.qz-voice-progress-bar');
-  assert.match(text.textContent, /正在/);
+  assert.equal(win.document.querySelector('.qz-voice-progress'), null, '不应该再有屏幕中间的进度卡片');
+  assert.equal(btn._vStatus, 'loading', '等待中按钮应处于 loading');
+  const arc = btn.querySelector('.qz-ring-arc');
+  assert.ok(arc, '等待态按钮里应有环形进度');
+  const start = parseFloat(arc.style.strokeDashoffset || arc.getAttribute('stroke-dashoffset'));
+
   await new Promise((r) => setTimeout(r, 700));
-  assert.equal(el.style.opacity, '1', '300ms 后要真正显示出来');
-  assert.match(text.textContent, /s$/, '应显示已等秒数');
-  // 起步 6%，之后在 AI 段内朝 60% 渐近爬升（不能钉死不动，否则看着像卡死）
-  const w1 = parseFloat(bar.style.width);
-  assert.ok(w1 > 6, '应已开始爬升，实际 ' + bar.style.width);
-  assert.ok(w1 <= 60, 'AI 段不得超过 60%，实际 ' + bar.style.width);
+  const now = parseFloat(arc.style.strokeDashoffset);
+  assert.ok(now < start, '环应越走越满（dashoffset 变小）：' + start + ' → ' + now);
+  assert.match(btn.title, /s$/, ' title 里应带已等秒数');
+  assert.ok(parseFloat(btn.title.replace(/^.*?([0-9.]+)s$/, '$1')) >= 0.5, '已等秒数应真的在走');
+
   await new Promise((r) => setTimeout(r, 700));
-  const w2 = parseFloat(bar.style.width);
-  assert.ok(w2 > w1, '应继续爬升：' + w1 + ' → ' + w2);
-  assert.ok(w2 <= 60, 'AI 段上限 60%，实际 ' + bar.style.width);
+  const later = parseFloat(arc.style.strokeDashoffset);
+  assert.ok(later < now, '应继续爬升：' + now + ' → ' + later);
+});
+
+test('音频缓存命中 → 直接播，连 TTS 都不请求', async () => {
+  const env = makeEnvWithQuestions({ provider: 'edge' });
+  const { win, calls } = env;
+  win.qzVoice.config.provider = 'edge';
+  win.qzVoice.config.edgeUrl = 'https://naive.workers.dev/tts';
+  const blob = new Blob([new Uint8Array(4096)], { type: 'audio/mpeg' });
+  env.store['en_voice_explain_f1_q0'] = { t: '缓存里的口语稿。', src: 'ai', at: Date.now() };
+  env.store['en_voice_audio_f1_q0'] = { blob: blob, at: Date.now() };
+
+  addAttemptsAndCopy(win, true);
+  const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await waitFor(() => calls.audio.length === 1);
+
+  assert.equal(calls.fetch.length, 0, '命中音频缓存时不该再请求 TTS');
+  assert.equal(calls.speak.length, 0, '更不该退回浏览器语音');
+  assert.equal(calls.audio[0].src, 'blob:test/4096');
+});
+
+test('后台预生成：听完一题就在后台备好后面 N 题（不发声、不改状态）', async () => {
+  // 每题 TTS 都返回一段音频
+  const audioFetch = () => Promise.resolve({
+    ok: true,
+    headers: { get: () => 'audio/mpeg' },
+    blob: () => Promise.resolve(new Blob([new Uint8Array(4096)], { type: 'audio/mpeg' }))
+  });
+  const env = makeEnvWithQuestions({ fetch: audioFetch }, 5);   // AI 用默认 deepseek 桩，只有语音引擎切 edge
+  const { win, calls } = env;
+  win.qzVoice.config.provider = 'edge';
+  win.qzVoice.config.edgeUrl = 'https://naive.workers.dev/tts';
+  win.qzVoice.config.batch = 3;
+
+  addAttemptsAndCopy(win, true);
+  const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await waitFor(() => win.qzVoice._state.status === 'playing');   // 第一题先正常播
+
+  const before = calls.speak.length;
+  win.qzVoice._batch.run('f1_q0');
+  await waitFor(
+    () => ['f1_q1', 'f1_q2', 'f1_q3'].every((k) => env.store['en_voice_audio_' + k]),
+    6000
+  );
+
+  ['f1_q1', 'f1_q2', 'f1_q3'].forEach((k) => {
+    assert.ok(env.store['en_voice_explain_' + k], k + ' 应有预生成的稿子');
+    assert.ok(env.store['en_voice_audio_' + k], k + ' 应有预生成的音频');
+  });
+  assert.equal(env.store['en_voice_audio_f1_q4'], undefined, '只备 3 道，不该多备第 4 道');
+  assert.equal(calls.speak.length, before, '后台预生成绝不能出声');
+});
+
+test('后台预生成：关掉（batch=0）就一点都不做', async () => {
+  const env = makeEnvWithQuestions({ provider: 'edge' }, 4);
+  const { win, calls } = env;
+  win.qzVoice.config.provider = 'edge';
+  win.qzVoice.config.edgeUrl = 'https://naive.workers.dev/tts';
+  win.qzVoice.config.batch = 0;
+  addAttemptsAndCopy(win, true);
+  win.qzVoice._batch.run('f1_q0');
+  await new Promise((r) => setTimeout(r, 500));
+  assert.equal(calls.fetch.length, 0, '关闭时不该有任何 TTS 请求');
+  assert.equal(env.store['en_voice_audio_f1_q1'], undefined);
 });
 
 test('流式改写 + 云端引擎 → 用所选引擎合成，不再偷偷用浏览器声音', async () => {

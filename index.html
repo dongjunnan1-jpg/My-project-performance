@@ -22588,9 +22588,11 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     volcToken: '',                             // 火山：旧版控制台 Access Token
     volcResourceId: 'seed-tts-2.0',            // 火山：模型版本 seed-tts-2.0 / seed-tts-1.0
     volcVoice: VOLC_DEFAULT_VOICE,             // 火山：音色 speaker（必须与上面的版本匹配）
-    prefetch: true                             // 简化解析后自动预生成语音稿（多一次 AI 调用，换秒播）
+    prefetch: true,                            // 简化解析后自动预生成语音稿（多一次 AI 调用，换秒播）
+    batch: 3                                   // 听完一题后，后台预生成后面 N 题的「稿子+音频」（0=关闭）
   };
   var VOICE_CFG_FIELDS = ['edgeUrl', 'edgeVoice', 'volcApiKey', 'volcAppId', 'volcToken', 'volcResourceId', 'volcVoice'];
+  var BATCH_MAX = 5;                           // 预生成上限：再多就是在替你烧额度，3~5 道足够覆盖「下一题」
 
   function loadVoiceTtsConfig(){
     try{
@@ -22603,6 +22605,9 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
         if(typeof obj[k] === 'string') voiceTtsConfig[k] = obj[k];
       });
       if(typeof obj.prefetch === 'boolean') voiceTtsConfig.prefetch = obj.prefetch;
+      if(typeof obj.batch === 'number' && isFinite(obj.batch)){
+        voiceTtsConfig.batch = Math.max(0, Math.min(BATCH_MAX, Math.round(obj.batch)));
+      }
     }catch(e){ console.warn('[VOICE] 读取语音配置失败：', e && (e.message || e)); }
   }
   function saveVoiceTtsConfig(){
@@ -22623,6 +22628,8 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
                  + '<rect x="16.8" y="13.6" width="4.6" height="7" rx="1.9"/></svg>';
   var ICON_PAUSE = '<svg ' + SVG_ATTR + '><path d="M9.4 5.6v12.8M14.6 5.6v12.8"/></svg>';
   var ICON_PLAY  = '<svg ' + SVG_ATTR + '><path d="M8.4 5.6l9.6 6.4-9.6 6.4z"/></svg>';
+  // 按钮内环形进度：r=10.6 在 24×24 viewBox 里刚好不贴边，周长用于 dasharray/dashoffset
+  var RING_R = 10.6, RING_C = 2 * Math.PI * RING_R;
 
   /* ---------- 3. 运行时状态（同一时间只允许一题在播） ---------- */
   var voiceState = { key:null, status:'idle', text:'', source:'', audio:null, objectUrl:null, utterance:null };
@@ -22657,46 +22664,31 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     refreshButtons();
   }
 
-  /* ---------- 3b. 等待进度条 ----------
-     [VOICE 2026-10-23e] 需求：点了 🎧 如果需要等（AI 写稿 / 云端合成首句），要看得见进度。
-     进度不是真实百分比（服务端不报），用两段式：AI 写稿 6→60%，合成首句 70→95%，
-     第一句出声直接跳到 100% 并淡出；同时显示已等秒数。等待 <300ms（缓存命中）不弹，
-     避免闪一下反而更闹。
-     每一段内部用「渐近爬升」（每 200ms 朝本段上限挪 6%）而不是钉死不动 —— 否则等 10 秒
-     时进度条一直停在 6%，看着比没有进度条更像卡死。 */
-  var prog = { el:null, bar:null, text:null, base:'', delay:0, tickTimer:0, startAt:0,
-               done:false, visible:false, pct:6, phaseMax:60 };
-
-  function ensureProgressEl(){
-    if(prog.el && prog.el.parentNode) return prog.el;
-    var el = document.createElement('div');
-    el.className = 'qz-voice-progress';
-    el.style.cssText = 'position:fixed;left:50%;bottom:92px;transform:translateX(-50%);z-index:100050;'
-      + 'width:min(264px,76vw);background:rgba(30,41,59,.94);color:#fff;border-radius:12px;'
-      + 'padding:10px 14px 12px;box-shadow:0 8px 24px rgba(0,0,0,.28);opacity:0;'
-      + 'transition:opacity .2s ease;pointer-events:none;';
-    var text = document.createElement('div');
-    text.className = 'qz-voice-progress-text';
-    text.style.cssText = 'font-size:12px;line-height:1.4;margin-bottom:8px;white-space:nowrap;'
-      + 'overflow:hidden;text-overflow:ellipsis;';
-    var track = document.createElement('div');
-    track.style.cssText = 'height:5px;border-radius:99px;background:rgba(255,255,255,.22);overflow:hidden;';
-    var bar = document.createElement('i');
-    bar.className = 'qz-voice-progress-bar';
-    bar.style.cssText = 'display:block;height:100%;width:0;border-radius:99px;'
-      + 'background:linear-gradient(90deg,#60a5fa,#38bdf8);transition:width .35s ease;';
-    track.appendChild(bar);
-    el.appendChild(text);
-    el.appendChild(track);
-    document.body.appendChild(el);
-    prog.el = el; prog.text = text; prog.bar = bar;
-    return el;
-  }
+  /* ---------- 3b. 等待进度：画在 🎧 按钮上的圆环 ----------
+     [VOICE 2026-10-23f] 用户反馈：屏幕中间那张卡片太碍事，希望「点按钮就在按钮上转圈，
+     转满了就表示语音好了」。所以进度不再是浮层，而是按钮自身的一圈环：
+       AI 写稿 6→60%，合成首句 70→93%，真正出声 → 100%，同时按钮切成 ⏸（可暂停）。
+     进度不是真实百分比（服务端不报），每段内部用「渐近爬升」（每 200ms 朝本段上限挪 6%），
+     否则等 10 秒环停在 6% 一点不动，比没有进度更像卡死。
+     阶段和已等秒数写进 title / aria-label（长按或读屏能看到），屏幕上一个字都不加。 */
+  var prog = { key:null, base:'', tickTimer:0, startAt:0, done:false, pct:0, phaseMax:60 };
 
   function progressStopTicker(){
-    clearTimeout(prog.delay);
     clearTimeout(prog.tickTimer);
-    prog.delay = 0; prog.tickTimer = 0;
+    prog.tickTimer = 0;
+  }
+
+  // 只改环的 dashoffset，别的都不碰；按钮若是刚被重新渲染（环是新的）也能对上
+  function paintRing(){
+    var btn = btnForKey(prog.key);
+    if(!btn || btn._vStatus !== 'loading') return;
+    var arc = btn.querySelector('.qz-ring-arc');
+    if(!arc) return;
+    var pct = Math.max(0, Math.min(100, prog.pct || 0));
+    arc.style.strokeDashoffset = (RING_C * (1 - pct / 100)).toFixed(2);
+    var sec = prog.startAt ? ((Date.now() - prog.startAt) / 1000).toFixed(1) : '0.0';
+    btn.title = (prog.base || '正在准备讲解…') + ' ' + sec + 's';
+    btn.setAttribute('aria-label', btn.title);
   }
 
   // 用递归 setTimeout 而不是 setInterval：测试环境会屏蔽 setInterval，这里也更省事
@@ -22704,81 +22696,53 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     clearTimeout(prog.tickTimer);
     prog.tickTimer = 0;
     (function tick(){
-      if(!prog.el || !prog.visible || prog.done) return;
-      var sec = ((Date.now() - prog.startAt) / 1000).toFixed(1);
-      prog.text.textContent = prog.base + ' ' + sec + 's';
-      // 渐近爬升：永远逼近本段上限但到不了，真实阶段切换时才跳上去
-      if(prog.phaseMax > prog.pct){
-        prog.pct += (prog.phaseMax - prog.pct) * 0.06;
-        prog.bar.style.width = prog.pct.toFixed(1) + '%';
-      }
+      if(!prog.key || prog.done) return;
+      if(prog.phaseMax > prog.pct) prog.pct += (prog.phaseMax - prog.pct) * 0.06;
+      paintRing();
       prog.tickTimer = setTimeout(tick, 200);
     })();
   }
 
-  function progressReveal(){
-    if(!prog.el) return;
-    prog.visible = true;
-    prog.el.style.opacity = '1';
-    progressStartTicker();
-  }
-
   function progressShow(base){
     try{
-      ensureProgressEl();
-      progressStopTicker();
+      prog.key = voiceState.key;
       prog.base = base || '正在准备讲解…';
       prog.startAt = Date.now();
       prog.done = false;
-      prog.visible = false;
       prog.pct = 6;
       prog.phaseMax = 60;                                // AI 写稿段上限
-      prog.text.textContent = prog.base;
-      prog.bar.style.width = '6%';
-      prog.el.style.opacity = '0';                       // 先不显示，300ms 后还没出来再露头
-      prog.delay = setTimeout(progressReveal, 300);
+      progressStopTicker();
+      paintRing();                                       // 按钮可能已经切到 loading，先画上 6%
+      progressStartTicker();
     }catch(e){}
   }
 
   function progressPhase(pct, base){
     try{
-      if(!prog.el) return;
       if(base) prog.base = base;
-      clearTimeout(prog.delay);
-      progressReveal();
       prog.pct = Math.max(0, Math.min(100, pct));
       prog.phaseMax = Math.max(prog.pct, 93);            // 新的一段：还能再爬到 93%
-      prog.bar.style.width = prog.pct + '%';
-      prog.text.textContent = prog.base;
+      paintRing();
+      if(!prog.tickTimer) progressStartTicker();
     }catch(e){}
   }
 
   function progressDone(){
     try{
-      if(!prog.el || prog.done) return;
+      if(prog.done) return;
       prog.done = true;
-      prog.visible = true;
       prog.pct = 100;
       prog.phaseMax = 100;
       progressStopTicker();
-      prog.bar.style.width = '100%';
-      prog.text.textContent = '开始播放';
-      setTimeout(function(){
-        try{ if(prog.el) prog.el.style.opacity = '0'; }catch(e){}
-      }, 260);
-      setTimeout(function(){
-        try{ if(prog.el) prog.bar.style.width = '0%'; }catch(e){}
-      }, 900);
+      paintRing();                                       // 环闭合 → 紧接着按钮切 ⏸，就是「语音好了」
     }catch(e){}
   }
 
   function progressHide(){
-    try{
-      if(!prog.el) return;
-      progressStopTicker();
-      prog.visible = false;
-      prog.el.style.opacity = '0';
-    }catch(e){}
+    progressStopTicker();
+    prog.key = null;
+    prog.pct = 0;
+    prog.done = false;
   }
 
   // 错误信息太长会把提示撑爆，截一下
@@ -22798,9 +22762,14 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
   }
   function renderBtn(btn, status){
     if(!btn) return;
-    if(btn._vStatus === status) return;         // 幂等：状态没变就不碰 DOM（避免 MutationObserver 自激）
+    var prev = btn._vStatus;
+    if(prev === status) return;                 // 幂等：状态没变就不碰 DOM（避免 MutationObserver 自激）
     btn._vStatus = status;
-    btn.innerHTML = status === 'playing' ? ICON_PAUSE : (status === 'paused' ? ICON_PLAY : ICON_IDLE);
+    var icon = status === 'playing' ? ICON_PAUSE : (status === 'paused' ? ICON_PLAY : ICON_IDLE);
+    // 等待态：headphone 缩小并压暗，外面套一圈「从 0 走到满」的环（进度就在按钮上，不再弹屏幕中间的卡片）
+    btn.innerHTML = status === 'loading'
+      ? '<span class="qz-voice-icon">' + icon + '</span>' + ringMarkup(prog.pct)
+      : icon;
     btn.classList.toggle('is-playing', status === 'playing');
     btn.classList.toggle('is-paused', status === 'paused');
     btn.classList.toggle('is-loading', status === 'loading');
@@ -22808,6 +22777,25 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     var label = status === 'playing' ? '暂停讲解' : (status === 'paused' ? '继续讲解' : '🎧 讲解');
     btn.title = label;
     btn.setAttribute('aria-label', label);
+    // 「环转满 → 开始出声」这一下要看得见：从等待切到播放时让图标弹一下
+    if(prev === 'loading' && status === 'playing'){
+      btn.classList.add('qz-pop');
+      setTimeout(function(){ btn.classList.remove('qz-pop'); }, 460);
+    }
+  }
+  function ringMarkup(pct){
+    var off = (RING_C * (1 - Math.max(0, Math.min(100, pct || 0)) / 100)).toFixed(2);
+    return '<span class="qz-ring" aria-hidden="true">'
+      + '<svg viewBox="0 0 24 24">'
+      +   '<circle class="qz-ring-track" cx="12" cy="12" r="' + RING_R + '"/>'
+      +   '<circle class="qz-ring-arc" cx="12" cy="12" r="' + RING_R + '"'
+      +     ' stroke-dasharray="' + RING_C.toFixed(2) + '" stroke-dashoffset="' + off + '"/>'
+      + '</svg></span>';
+  }
+  function btnForKey(key){
+    if(!key) return null;
+    var safe = String(key).replace(/["\\]/g, '\\$&');
+    return document.querySelector('.q-voice-btn[data-key="' + safe + '"]');
   }
 
   /* ---------- 4. 停止 / 暂停 / 继续 ---------- */
@@ -22880,7 +22868,11 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       var voice = null;
       try{ voice = getBestChineseVoice(); }catch(e){ voice = null; }
       if(voice) u.voice = voice;
-      u.onstart = function(){ if(token === playToken) progressDone(); };
+      u.onstart = function(){
+        if(token !== playToken) return;
+        setStatus('playing');                     // 真正出声才切「播放中」，等待期留给按钮上的环
+        progressDone();
+      };
       u.onend = function(){ resolve('ended'); };
       u.onerror = function(ev){
         var code = (ev && ev.error) || 'unknown';
@@ -22908,7 +22900,8 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     }).then(function(r){ clearTimeout(timer); return r; }, function(e){ clearTimeout(timer); throw e; });
   }
 
-  function fetchEdgeAudio(text){
+  // 只负责合成出音频 Blob（不建 objectURL）—— 便于缓存进 IndexedDB 给后台预生成复用
+  function fetchEdgeBlob(text){
     var url = String(voiceTtsConfig.edgeUrl || '').trim();
     if(!url) return Promise.reject(new Error('未配置 Edge TTS Worker 地址'));
     if(!/^https?:\/\//i.test(url)) return Promise.reject(new Error('Edge TTS 地址格式不合法'));
@@ -22932,7 +22925,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       });
     }).then(function(blob){
       // 注意：超时定时器已由 postTts() 自己清理，这里不能再碰 timer/ctrl（会 ReferenceError）。
-      return URL.createObjectURL(blob);
+      return blob;
     });
   }
 
@@ -22943,7 +22936,11 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       voiceState.audio = audio;
       voiceState.objectUrl = objUrl;
       // 真正出声的那一刻才把等待进度条收尾（play() 成功 ≠ 已经出声）
-      audio.onplaying = function(){ if(token === undefined || token === playToken) progressDone(); };
+      audio.onplaying = function(){
+        if(token !== undefined && token !== playToken) return;
+        setStatus('playing');                     // 出声了才从「等待环」切到播放态
+        progressDone();
+      };
       audio.onended = function(){ resolve('ended'); };
       audio.onerror = function(){ reject(new Error('音频解码/播放失败')); };
       var p = audio.play();
@@ -23025,8 +23022,9 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     return { chunks: chunks, error: errMsg };
   }
 
-  // 只负责「合成出音频」，返回 objectURL，不播 —— 便于流式路径边合成边排队播放
-  function fetchVolcAudio(text){
+  // 只负责「合成出音频」，返回 Blob（不建 objectURL）—— 便于流式路径边合成边排队播放，
+  // 也便于后台预生成把音频存进 IndexedDB
+  function fetchVolcBlob(text){
     var auth = volcAuth();
     if(!auth){
       return Promise.reject(new Error('火山引擎未配置 API Key（或旧版 AppID + Access Token）'));
@@ -23076,19 +23074,26 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       for(i = 0; i < parts.length; i++){ merged.set(parts[i], offset); offset += parts[i].length; }
 
       var blob = new Blob([merged], { type: 'audio/mpeg' });
-      return URL.createObjectURL(blob);
+      return blob;
     }).catch(function(err){
       if(timer) clearTimeout(timer);
       throw err;
     });
   }
 
-  // 统一取音频：edge / volc 返回 objectURL；browser 走 speechSynthesis，没有 URL
-  function fetchTtsAudio(text){
+  // 统一取音频 Blob：browser 走 speechSynthesis，没有 blob（返回 null）
+  function fetchTtsBlob(text){
     var provider = voiceTtsConfig.provider || 'browser';
-    if(provider === 'edge') return fetchEdgeAudio(text);
-    if(provider === 'volc') return fetchVolcAudio(text);
+    if(provider === 'edge') return fetchEdgeBlob(text);
+    if(provider === 'volc') return fetchVolcBlob(text);
     return Promise.resolve(null);
+  }
+  // 统一取可播放的 objectURL
+  function fetchTtsAudio(text){
+    return fetchTtsBlob(text).then(function(blob){
+      if(!blob) return null;
+      try{ return URL.createObjectURL(blob); }catch(e){ return null; }
+    });
   }
 
   /* 统一播放入口。
@@ -23115,24 +23120,51 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
 
   function startSpeak(key, text, source){
     var token = ++playToken;
+    var provider = voiceTtsConfig.provider || 'browser';
     voiceState.key = key;
     voiceState.text = text;
     voiceState.source = source || '';
     releaseAudio();
     refreshButtons();
-    setStatus('playing');
-    if(voiceTtsConfig.provider && voiceTtsConfig.provider !== 'browser'){
-      progressPhase(78, '正在合成语音…');
-    }
-    speakWithTts(text, token).then(function(reason){
+    // 注意：这里**先不切 playing** —— 云端引擎还要合成首句，切换权交给「真正出声」那一刻
+    // （speakBrowser 的 onstart / playObjectUrl 的 onplaying / makeEngineSpeaker 拿到首段）。
+    // 否则按钮一上来就显示 ⏸，用户完全看不到「还在转圈」。
+    setStatus('loading');
+    if(provider !== 'browser') progressPhase(78, '正在合成语音…');
+    enqueueBatch(key);                          // 这一题开始播 → 顺手排队后台备好后面几题
+
+    function finish(reason){
       if(token !== playToken) return;
       if(reason === 'canceled') return;
       voiceStop();
-    }).catch(function(err){
+    }
+    function fail(err){
       if(token !== playToken) return;
       console.warn('[VOICE] 播报失败：', err && (err.message || err));
       voiceStop();
       toast(engineLabel() + ' 合成失败：' + shortErr(err) + '（不会再用浏览器语音）');
+    }
+    function synth(){
+      return speakWithTts(text, token).then(finish, fail);
+    }
+
+    if(provider === 'browser'){ synth(); return; }
+
+    // ① 先看后台预生成有没有把这一题的音频合成好 —— 有就直接播，连 TTS 都不用请求
+    readAudioCache(key).then(function(hit){
+      if(token !== playToken) return 'canceled';
+      if(!hit) return synth();
+      var url = null;
+      try{ url = URL.createObjectURL(hit.blob); }catch(e){ url = null; }
+      if(!url) return synth();
+      return playObjectUrl(url, token).then(finish, function(err){
+        // 预生成的音频坏了（极少见）→ 现场重合成一次，不走死循环
+        console.warn('[VOICE] 缓存的音频播不了，改为现场合成：', err && (err.message || err));
+        return synth();
+      });
+    }).catch(function(){
+      if(token !== playToken) return;
+      return synth();
     });
   }
 
@@ -23171,7 +23203,86 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     return cacheDb().then(function(d){
       return new Promise(function(resolve){
         var tx = d.transaction(CACHE_STORE, 'readwrite');
-        tx.objectStore(CACHE_STORE).put({ t:text, src:src || '', at:Date.now() }, cacheKey(key));
+        var os = tx.objectStore(CACHE_STORE);
+        os.put({ t:text, src:src || '', at:Date.now() }, cacheKey(key));
+        // 稿子换了，旧的音频就对不上了 → 一并作废，避免「新稿配旧声」
+        try{ os.delete(audioKey(key)); }catch(e){}
+        tx.oncomplete = function(){ resolve(true); };
+        tx.onerror = function(){ resolve(false); };
+      });
+    }).catch(function(){ return false; });
+  }
+
+  /* 音频缓存：后台预生成会把合成好的 Blob 存这里，点 🎧 直接播，连 TTS 都不用再请求。
+     和文字稿同库同 store，只是 key 前缀不同（不用升 DB 版本）。 */
+  // 只认「像音频 Blob」的东西（用鸭子类型判断，跨 realm 的 Blob 也能过）
+  function isAudioBlob(b){ return !!b && typeof b.size === 'number' && b.size > 512 && typeof b.slice === 'function'; }
+  var AUDIO_PREFIX = 'en_voice_audio_';
+  function audioKey(key){ return AUDIO_PREFIX + key; }
+
+  function readAudioCache(key){
+    return cacheDb().then(function(d){
+      return new Promise(function(resolve){
+        var tx = d.transaction(CACHE_STORE, 'readonly');
+        var req = tx.objectStore(CACHE_STORE).get(audioKey(key));
+        req.onsuccess = function(){
+          var v = req.result;
+          resolve(v && isAudioBlob(v.blob) ? v : null);
+        };
+        req.onerror = function(){ resolve(null); };
+      });
+    }).catch(function(){ return null; });
+  }
+
+  function writeAudioCache(key, blob){
+    if(!isAudioBlob(blob)) return Promise.resolve(false);
+    return cacheDb().then(function(d){
+      return new Promise(function(resolve){
+        var tx = d.transaction(CACHE_STORE, 'readwrite');
+        tx.objectStore(CACHE_STORE).put({ blob: blob, at: Date.now() }, audioKey(key));
+        tx.oncomplete = function(){ resolve(true); };
+        tx.onerror = function(){ resolve(false); };
+      });
+    }).then(function(ok){
+      if(ok) pruneAudioCache();
+      return ok;
+    }).catch(function(){ return false; });
+  }
+
+  // 音频比文字占地方（一题几十~几百 KB），只留最近 10 条，超了删最旧的
+  function pruneAudioCache(max){
+    max = max || 10;
+    return cacheDb().then(function(d){
+      return new Promise(function(resolve){
+        var tx = d.transaction(CACHE_STORE, 'readwrite');
+        var os = tx.objectStore(CACHE_STORE);
+        var rows = [];
+        if(typeof os.openCursor !== 'function'){ resolve(true); return; }   // 极简环境（测试桩）没有游标
+        var cur = os.openCursor();
+        cur.onsuccess = function(e){
+          var c = e.target.result;
+          if(!c){ finish(); return; }
+          if(typeof c.key === 'string' && c.key.indexOf(AUDIO_PREFIX) === 0){
+            rows.push({ k: c.key, at: (c.value && c.value.at) || 0 });
+          }
+          c.continue();
+        };
+        cur.onerror = function(){ resolve(false); };
+        function finish(){
+          if(rows.length <= max){ resolve(true); return; }
+          rows.sort(function(a, b){ return a.at - b.at; });
+          rows.slice(0, rows.length - max).forEach(function(r){ try{ os.delete(r.k); }catch(e){} });
+          resolve(true);
+        }
+      });
+    }).catch(function(){ return false; });
+  }
+
+  function clearAudioCache(key){
+    return cacheDb().then(function(d){
+      return new Promise(function(resolve){
+        var tx = d.transaction(CACHE_STORE, 'readwrite');
+        tx.objectStore(CACHE_STORE).delete(audioKey(key));
         tx.oncomplete = function(){ resolve(true); };
         tx.onerror = function(){ resolve(false); };
       });
@@ -23576,6 +23687,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       voiceState.text = full;
       voiceState.source = 'ai';
       writeCache(key, full, existing.origin);
+      enqueueBatch(key);                          // 流式路径：稿子落库后同样排队后台备后面几题
       speaker.finish();
     }).catch(function(err){
       clearTimeout(idleTimer);
@@ -23892,7 +24004,8 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
         extra = '（未填 API Key → 无法合成）';
       }
       hint.innerHTML = '当前引擎：' + escapeHtml(engineLabel()) + extra
-        + '<br>合成失败会直接停下并提示原因，<b>不会改用浏览器语音</b>。';
+        + '<br>合成失败会直接停下并提示原因，<b>不会改用浏览器语音</b>。'
+        + (batchEnabled() ? '<br>后台预生成已开：每听完一题，静默备好后面 ' + (voiceTtsConfig.batch || 0) + ' 题。' : '');
     }
   }
   function installVoiceSettingsPanel(){
@@ -23940,6 +24053,12 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       +   '<input type="checkbox" id="qzVoicePrefetch" style="width:auto;margin:0;">'
       +   '简化解析后自动预生成语音稿（多一次 AI 调用，点 🎧 秒播）'
       + '</label>'
+      + '<label>后台预生成（听完一题，自动备好后面几题的语音）</label>'
+      + '<select id="qzVoiceBatch">'
+      +   '<option value="0">关闭（每题都现场合成）</option>'
+      +   '<option value="3">后面 3 道题</option>'
+      +   '<option value="5">后面 5 道题</option>'
+      + '</select>'
       + '<div id="qzVoiceHint" style="font-size:11px;color:#64748b;line-height:1.5;"></div>';
     var saveBtn = panel.querySelector('button.btn-primary') || panel.querySelector('button');
     if(saveBtn) panel.insertBefore(box, saveBtn); else panel.appendChild(box);
@@ -23953,6 +24072,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     var volcId = box.querySelector('#qzVoiceVolcAppId');
     var volcToken = box.querySelector('#qzVoiceVolcToken');
     var prefetchBox = box.querySelector('#qzVoicePrefetch');
+    var batchSel = box.querySelector('#qzVoiceBatch');
     sel.value = voiceTtsConfig.provider;
     edgeUrl.value = voiceTtsConfig.edgeUrl || '';
     edgeVoice.value = voiceTtsConfig.edgeVoice || '';
@@ -23962,6 +24082,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     volcId.value = voiceTtsConfig.volcAppId || '';
     volcToken.value = voiceTtsConfig.volcToken || '';
     if(prefetchBox) prefetchBox.checked = voiceTtsConfig.prefetch !== false;
+    if(batchSel) batchSel.value = String(voiceTtsConfig.batch || 0);
 
     function commit(){
       voiceTtsConfig.provider = (sel.value === 'edge' || sel.value === 'volc') ? sel.value : 'browser';
@@ -23973,6 +24094,11 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       voiceTtsConfig.volcAppId = String(volcId.value || '').trim();
       voiceTtsConfig.volcToken = String(volcToken.value || '').trim();
       if(prefetchBox) voiceTtsConfig.prefetch = !!prefetchBox.checked;
+      if(batchSel){
+        var n = parseInt(batchSel.value, 10);
+        voiceTtsConfig.batch = isFinite(n) ? Math.max(0, Math.min(BATCH_MAX, n)) : 0;
+        resetBatch();                                  // 改了数量就重排，别沿用旧队列
+      }
       saveVoiceTtsConfig();
       syncEngineFields();
     }
@@ -23983,6 +24109,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       el.addEventListener('blur', commit);
     });
     if(prefetchBox) prefetchBox.addEventListener('change', commit);   // 勾选框只在 change 上有意义
+    if(batchSel) batchSel.addEventListener('change', commit);
     syncEngineFields();
     return true;
   }
@@ -24036,6 +24163,105 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     window.simplifySolution = wrapped;
   }
 
+  /* ---------- 12c. 后台批量预生成：听完一题，顺手把后面 N 题备好 ----------
+     用户诉求（2026-10-23f）：不想每道题都等一次。听完一题后，静默把后面 3~5 题的
+     「口语稿 + 云端音频」都做好，轮到那题时点 🎧 直接出声。
+     硬约束：绝不发声、绝不改 voiceState、绝不弹 toast；失败只 console.warn。
+     前台正在等稿（status==='loading'）时自动让路，避免和用户抢带宽。 */
+  var batchQueue = [], batchRunning = false, batchDone = {}, batchToken = 0;
+
+  function batchEnabled(){ return (voiceTtsConfig.batch || 0) > 0; }
+
+  // 取当前题后面紧邻的 n 道题（顺序与列表一致，到末尾就停，不绕回）
+  function followingKeys(key, n){
+    var list = [];
+    try{
+      if(typeof filteredQuestions !== 'undefined' && Array.isArray(filteredQuestions)) list = filteredQuestions;
+    }catch(e){ list = []; }
+    if(!list.length || !key) return [];
+    var idx = -1;
+    for(var i = 0; i < list.length; i++){ if(list[i] && list[i]._key === key){ idx = i; break; } }
+    if(idx < 0) return [];
+    var out = [];
+    for(var j = idx + 1; j < list.length && out.length < n; j++){
+      if(list[j] && list[j]._key) out.push(list[j]._key);
+    }
+    return out;
+  }
+
+  function enqueueBatch(key){
+    try{
+      if(!batchEnabled()) return;
+      var n = Math.min(BATCH_MAX, voiceTtsConfig.batch || 0);
+      followingKeys(key, n).forEach(function(k){
+        if(batchQueue.indexOf(k) < 0 && !batchDone[k]) batchQueue.push(k);
+      });
+      batchPump();
+    }catch(e){}
+  }
+
+  function batchPump(){
+    if(batchRunning) return;
+    if(!batchEnabled()){ batchQueue.length = 0; return; }
+    if(!batchQueue.length) return;
+    if(voiceState.status === 'loading'){ setTimeout(batchPump, 1000); return; }   // 让路
+    var key = batchQueue.shift();
+    if(!key || batchDone[key]){ batchPump(); return; }
+    batchDone[key] = true;
+    batchRunning = true;
+    batchOne(key).then(function(){
+      return new Promise(function(res){ setTimeout(res, 400); });   // 题目之间喘口气，别打满带宽
+    }).then(function(){
+      batchRunning = false;
+      batchPump();
+    }, function(){
+      batchRunning = false;
+      batchPump();
+    });
+  }
+
+  // 单题：有音频就跳；有文字稿就只合成音频；都没有才花一次 AI 改写。全程不发声。
+  function batchOne(key){
+    var token = batchToken;
+    function alive(){ return token === batchToken; }
+    return readAudioCache(key).then(function(hit){
+      if(hit) return true;
+      return readCache(key).then(function(cached){
+        if(cached && cached.t) return cached.t;
+        return resolveItem(key).then(function(item){
+          if(!item) return null;
+          return pickExistingAnalysis(key, item).then(function(existing){
+            if(!existing.text) return null;                 // 没解析的题不硬编，跳过
+            return rewriteToSpoken(item, existing.text).then(function(script){
+              if(!script) return null;
+              return writeCache(key, script, existing.origin).then(function(){ return script; });
+            });
+          });
+        });
+      }).then(function(text){
+        if(!text || !alive()) return false;
+        if((voiceTtsConfig.provider || 'browser') === 'browser') return true;  // 浏览器语音没法离屏预合成
+        return fetchTtsBlob(text).then(function(blob){
+          if(!alive() || !blob) return false;
+          return writeAudioCache(key, blob).then(function(ok){
+            if(ok) console.log('[VOICE] 已后台备好语音：' + key);
+            return ok;
+          });
+        });
+      });
+    }).catch(function(err){
+      console.warn('[VOICE] 后台预生成失败（不影响使用）：', err && (err.message || err));
+      return false;
+    });
+  }
+
+  function resetBatch(){
+    batchToken++;
+    batchQueue.length = 0;
+    batchRunning = false;
+    batchDone = {};
+  }
+
   /* ---------- 13. 样式：只补「状态色 / 加载态」，尺寸规则全部沿用 .q-copy-btn ---------- */
   function installStyle(){
     if(document.getElementById('qzVoiceStyle')) return;
@@ -24043,7 +24269,18 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     style.id = 'qzVoiceStyle';
     style.textContent = [
       '.q-title .q-voice-btn.is-playing, .q-title .q-voice-btn.is-paused { color: var(--main); }',
-      '.q-title .q-voice-btn.is-loading { opacity: .45; cursor: progress; }',
+      '.q-title .q-voice-btn.is-loading { opacity: 1; cursor: progress; }',
+      // 等待态：图标压暗，外面一层环形进度（currentColor → 浅色/深色主题都跟着走）
+      '.q-title .q-voice-btn { position: relative; }',
+      '.q-title .q-voice-btn .qz-voice-icon { display: flex; align-items: center; justify-content: center; }',
+      '.q-title .q-voice-btn.is-loading .qz-voice-icon { opacity: .4; }',
+      '.q-title .q-voice-btn .qz-ring { position: absolute; inset: -2px; pointer-events: none; }',
+      '.q-title .q-voice-btn .qz-ring svg { width: 100%; height: 100%; display: block; transform: rotate(-90deg); }',
+      '.q-title .q-voice-btn .qz-ring-track { fill: none; stroke: currentColor; stroke-opacity: .18; stroke-width: 2.2; }',
+      '.q-title .q-voice-btn .qz-ring-arc { fill: none; stroke: var(--main, #3b82f6); stroke-width: 2.6; stroke-linecap: round; transition: stroke-dashoffset .18s linear; }',
+      // 环闭合 → 按钮切播放态时弹一下，明确「语音好了」
+      '@keyframes qzVoicePop { 0% { transform: scale(1); } 45% { transform: scale(1.28); } 100% { transform: scale(1); } }',
+      '.q-title .q-voice-btn.qz-pop svg { animation: qzVoicePop .42s ease; }',
       // 🎧 + 📋 的不可断行小组：只负责「换行时不被拆开」，间距与 .q-title 的 gap 一致
       '.q-title .q-title-actions { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }',
       '.qz-voice-settings { display: flex; flex-direction: column; gap: 6px; }',
@@ -24097,7 +24334,9 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       return cacheDb().then(function(d){
         return new Promise(function(resolve){
           var tx = d.transaction(CACHE_STORE, 'readwrite');
-          tx.objectStore(CACHE_STORE).delete(cacheKey(key));
+          var os = tx.objectStore(CACHE_STORE);
+          os.delete(cacheKey(key));
+          os.delete(audioKey(key));                 // 音频一起清，别留「没稿子却有旧声」
           tx.oncomplete = function(){ resolve(true); };
           tx.onerror = function(){ resolve(false); };
         });
@@ -24106,7 +24345,17 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     _placeVoiceButton: placeVoiceButton,
     _installSimplifyPrefetch: installSimplifyPrefetch,
     _prefetch: prefetchVoiceScript,
-    _state: voiceState
+    _state: voiceState,
+    // 调试 / 测试用：让后台预生成可以手动触发、也能看到队列状态
+    _batch: {
+      run: enqueueBatch,
+      pump: batchPump,
+      reset: resetBatch,
+      following: followingKeys,
+      state: function(){ return { queue: batchQueue.slice(), running: batchRunning, done: Object.keys(batchDone) }; }
+    },
+    _audioCache: { read: readAudioCache, write: writeAudioCache, clear: clearAudioCache },
+    _progress: prog
   };
 
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
