@@ -22583,7 +22583,8 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     edgeVoice: 'zh-CN-XiaoxiaoNeural',         // Edge TTS 音色
     volcAppId: '',                             // 火山引擎：预留
     volcToken: '',                             // 火山引擎：预留
-    volcVoice: 'zh_female_wanwanxiaohe_moon_bigtts'
+    volcVoice: 'zh_female_wanwanxiaohe_moon_bigtts',
+    prefetch: true                             // 简化解析后自动预生成语音稿（多一次 AI 调用，换秒播）
   };
   var VOICE_CFG_FIELDS = ['edgeUrl', 'edgeVoice', 'volcAppId', 'volcToken', 'volcVoice'];
 
@@ -22597,6 +22598,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       VOICE_CFG_FIELDS.forEach(function(k){
         if(typeof obj[k] === 'string') voiceTtsConfig[k] = obj[k];
       });
+      if(typeof obj.prefetch === 'boolean') voiceTtsConfig.prefetch = obj.prefetch;
     }catch(e){ console.warn('[VOICE] 读取语音配置失败：', e && (e.message || e)); }
   }
   function saveVoiceTtsConfig(){
@@ -22670,6 +22672,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
   /* ---------- 4. 停止 / 暂停 / 继续 ---------- */
   function voiceStop(){
     playToken++;                                // 作废所有在途异步
+    if(streamCtrl){ try{ streamCtrl.abort(); }catch(e){} streamCtrl = null; }   // 掐断在途的流式请求
     try{ if(window.speechSynthesis) window.speechSynthesis.cancel(); }catch(e){}
     releaseAudio();
     voiceState.key = null; voiceState.text = ''; voiceState.source = '';
@@ -22714,7 +22717,9 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       if(synth.speaking || synth.pending) return;
       console.warn('[VOICE] resume 无效，从头重播');
       voiceState.key = key;
-      startSpeak(key, text, voiceState.source);
+      // 流式播放时 voiceState.text 还没攒完（或仍是空），此时没有可重播的全文 → 重跑链路（多半已命中缓存）
+      if(text) startSpeak(key, text, voiceState.source);
+      else startExplain(key);
     }, 400);
   }
 
@@ -23082,6 +23087,178 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     });
   }
 
+  /* ---------- 8b. 流式改写 + 边到边播（首句先出声，把等待压到 1~2 秒） ----------
+     为什么不再整段等：一份 250~350 字的口语稿，非流式要等模型把全文吐完（实测 5~15 秒）
+     才有第一个字可播。改成 SSE 流式后，每凑够一句就先念一句，用户很快就能听到
+     「这道题考的是……」，后面的句子在念的同时继续生成。 */
+  var streamCtrl = null;                        // 在途流式请求：voiceStop 时 abort，避免白发请求
+  var CHUNK_MIN = 6, CHUNK_MAX = 46;            // 短于 6 字的碎句先攒着；超过 46 字退到逗号断开
+
+  // 从累积缓冲区切出「可以念了」的一段，返回 [chunk, rest]
+  // 规则：优先在句末标点（。！？；）断开；一整句太长时，退到最近一个逗号断；
+  // 连逗号都没有（模型偶尔一口气写很长）才按硬上限切，避免出现念二十秒的超长句。
+  function cutChunk(buf, final){
+    if(final) return [String(buf || '').trim(), ''];
+    if(!buf) return ['', ''];
+    var lastBreak = -1;                             // 最近一个「至少念完半句」的逗号位置
+    for(var i = 0; i < buf.length; i++){
+      var ch = buf.charAt(i);
+      if(i >= CHUNK_MIN && '。！？；!?;…\n'.indexOf(ch) >= 0){
+        var j = i + 1;
+        while(j < buf.length && '”"』」）)】'.indexOf(buf.charAt(j)) >= 0) j++;   // 连同后引号/括弧一起念
+        return [buf.slice(0, j).trim(), buf.slice(j)];
+      }
+      if('，,、：:'.indexOf(ch) >= 0) lastBreak = i + 1;
+      if(i + 1 >= CHUNK_MAX && lastBreak > CHUNK_MIN){
+        return [buf.slice(0, lastBreak).trim(), buf.slice(lastBreak)];
+      }
+    }
+    if(buf.length >= CHUNK_MAX * 2){                 // 通篇没有标点：硬切
+      return [buf.slice(0, CHUNK_MAX).trim(), buf.slice(CHUNK_MAX)];
+    }
+    return ['', buf];
+  }
+
+  // 流式请求：只认 delta.content；reasoning_content 一律不进正文（否则会念出思考过程）
+  function streamScript(item, existingText, onDelta, signal){
+    var provider = (typeof aiConfig !== 'undefined' && aiConfig && aiConfig.provider) ? aiConfig.provider : '';
+    var ep = (typeof AI_ENDPOINTS !== 'undefined' && AI_ENDPOINTS) ? AI_ENDPOINTS[provider] : null;
+    if(!ep) return Promise.reject(new Error('未配置 AI 服务商'));
+    if(!aiConfig.apiKey) return Promise.reject(new Error('未配置 API Key'));
+    if(typeof fetch !== 'function') return Promise.reject(new Error('当前环境不支持 fetch'));
+    var body = {
+      model: (aiConfig && aiConfig.model) || ep.model || '',
+      messages: [
+        { role:'system', content: VOICE_SYSTEM_PROMPT },
+        { role:'user', content: buildUserMessage(item, existingText) }
+      ],
+      temperature: 0.6,
+      max_tokens: 900,                 // 250~350 字中文够用；额度小一点也能少等一点
+      stream: true
+    };
+    return fetch(ep.url, {
+      method:'POST',
+      headers: (typeof aiAuthHeaders === 'function') ? aiAuthHeaders() : {'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+      signal: signal
+    }).then(function(resp){
+      if(!resp || !resp.ok) throw new Error('HTTP ' + ((resp && resp.status) || '?'));
+      if(!resp.body || typeof resp.body.getReader !== 'function') throw new Error('该服务不支持流式返回');
+      var reader = resp.body.getReader();
+      var dec = typeof TextDecoder === 'function' ? new TextDecoder('utf-8') : null;
+      if(!dec) throw new Error('当前环境不支持流式解码');
+      var pending = '';
+      function pump(){
+        return reader.read().then(function(r){
+          if(r.done) return 'done';
+          pending += dec.decode(r.value, { stream:true });
+          var lines = pending.split('\n');
+          pending = lines.pop();
+          for(var i = 0; i < lines.length; i++){
+            var line = String(lines[i] || '').trim();
+            if(line.indexOf('data:') !== 0) continue;
+            var payload = line.slice(5).trim();
+            if(!payload || payload === '[DONE]') continue;
+            try{
+              var json = JSON.parse(payload);
+              var delta = json.choices && json.choices[0] && json.choices[0].delta;
+              if(delta && delta.content) onDelta(delta.content);
+            }catch(e){}
+          }
+          return pump();
+        });
+      }
+      return pump();
+    });
+  }
+
+  /* 流式播报器：一句一个 utterance，speechSynthesis 自己排队；
+     最后一句念完（且流已结束）才归位，中途不会因为队列空一下就把按钮打回 idle。 */
+  function makeStreamSpeaker(token){
+    var pending = 0, closed = false, started = false;
+    var synth = window.speechSynthesis;
+    function done(){ if(token === playToken) voiceStop(); }
+    function maybeDone(){ if(closed && pending <= 0) done(); }
+    function say(chunk){
+      if(token !== playToken || !chunk) return;
+      if(!synth || typeof window.SpeechSynthesisUtterance !== 'function') return;
+      var u = new SpeechSynthesisUtterance(chunk);
+      u.lang = 'zh-CN';
+      u.rate = 1.0;
+      u.pitch = 1.02;
+      u.volume = 1;
+      try{ var v = getBestChineseVoice(); if(v) u.voice = v; }catch(e){}
+      pending++;
+      if(!started){ started = true; setStatus('playing'); }   // 有第一句就切成「播放中」，可暂停
+      voiceState.utterance = u;
+      u.onend = function(){ pending--; maybeDone(); };
+      u.onerror = function(){ pending--; maybeDone(); };
+      try{ synth.speak(u); }catch(e){ pending--; }
+    }
+    return { say: say, finish: function(){ closed = true; maybeDone(); }, isStarted: function(){ return started; } };
+  }
+
+  // 流式生成 + 边到边播；完整走完才写缓存（半截稿不落库）
+  function streamExplain(key, item, existing, token){
+    var speaker = makeStreamSpeaker(token);
+    var acc = '', buf = '', ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
+    streamCtrl = ctrl;
+    voiceState.source = 'ai';                     // 一开始就标成 AI 稿，别等全文结束（暂停/回放要靠它判来源）
+    // 卡住保护：模型中途 15 秒不出新字（掉线/被判风控/网关挂住）→ 主动 abort 收尾，
+    // 不能让语音停在半句上、按钮一直转圈。
+    var idleTimer = 0;
+    function armIdle(){
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(function(){
+        if(token !== playToken) return;
+        console.warn('[VOICE] 流式改写 15 秒无新内容，主动收尾');
+        try{ if(ctrl) ctrl.abort(); }catch(e){}
+      }, 15000);
+    }
+    armIdle();
+    var t0 = Date.now();
+    var tipTimer = setTimeout(function(){
+      if(token !== playToken || speaker.isStarted()) return;
+      var sec = Math.round((Date.now() - t0) / 1000);
+      toast('正在写讲解稿…已 ' + sec + ' 秒（同一题第二次点会秒播）');
+    }, 1200);
+
+    function feed(piece){
+      armIdle();
+      acc += piece;
+      buf += piece;
+      for(var guard = 0; guard < 40; guard++){
+        var pair = cutChunk(buf, false);
+        if(!pair[0]) break;
+        buf = pair[1];
+        speaker.say(pair[0]);
+      }
+    }
+
+    return streamScript(item, existing.text, feed, ctrl ? ctrl.signal : undefined).then(function(){
+      clearTimeout(tipTimer);
+      clearTimeout(idleTimer);
+      if(streamCtrl === ctrl) streamCtrl = null;
+      if(token !== playToken) return;
+      var tail = String(buf || '').trim();
+      if(tail){ speaker.say(tail); buf = ''; }
+      var full = cleanScript(acc);
+      if(!full) throw new Error('AI 返回内容为空');
+      voiceState.text = full;
+      voiceState.source = 'ai';
+      writeCache(key, full, existing.origin);
+      speaker.finish();
+    }).catch(function(err){
+      clearTimeout(tipTimer);
+      clearTimeout(idleTimer);
+      if(streamCtrl === ctrl) streamCtrl = null;
+      if(token !== playToken) return;
+      // 已经出声过就不再整段重来，否则同一道题会被念两遍；只把队列收尾
+      if(speaker.isStarted()){ speaker.finish(); return; }
+      throw err;
+    });
+  }
+
   /* ---------- 9. 主流程 ---------- */
   function startExplain(key){
     voiceStop();
@@ -23107,17 +23284,22 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
             toast('这道题没有可讲解的解析');
             return null;
           }
-          // ③ AI 口语化改写
-          return rewriteToSpoken(item, existing.text).then(function(script){
+          // ③ 流式口语化改写：第一句到就先播，不等全文
+          return streamExplain(key, item, existing, token).catch(function(err){
             if(!alive()) return null;
-            writeCache(key, script, existing.origin);
-            startSpeak(key, script, 'ai');
-          }).catch(function(err){
-            if(!alive()) return null;
-            console.warn('[VOICE] AI 讲解改写失败，改用原解析播报：', err && (err.message || err));
-            var reason = (err && err.message) || '';
-            toast(/Key|Key|apiKey|中转/i.test(reason) ? '未配置/不可用的 AI，已用原解析播报' : 'AI 讲解失败，已用原解析播报');
-            startSpeak(key, existing.text, 'raw');   // ⑤ 兜底：原解析原文
+            console.warn('[VOICE] 流式改写失败，退回整段请求：', err && (err.message || err));
+            // ③' 流式不可用（服务不支持 SSE / 断流 / 环境无 TextDecoder）→ 退回整段 requestAI
+            return rewriteToSpoken(item, existing.text).then(function(script){
+              if(!alive()) return null;
+              writeCache(key, script, existing.origin);
+              startSpeak(key, script, 'ai');
+            }).catch(function(err2){
+              if(!alive()) return null;
+              console.warn('[VOICE] AI 讲解改写失败，改用原解析播报：', err2 && (err2.message || err2));
+              var reason = (err2 && err2.message) || '';
+              toast(/Key|apiKey|中转/i.test(reason) ? '未配置/不可用的 AI，已用原解析播报' : 'AI 讲解失败，已用原解析播报');
+              startSpeak(key, existing.text, 'raw');   // ⑤ 兜底：原解析原文
+            });
           });
         });
       });
@@ -23257,6 +23439,10 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       +   '<label>火山 Access Token（预留）</label>'
       +   '<input type="password" id="qzVoiceVolcToken" placeholder="尚未接入，占位">'
       + '</div>'
+      + '<label style="display:flex;align-items:center;gap:6px;font-size:12px;">'
+      +   '<input type="checkbox" id="qzVoicePrefetch" style="width:auto;margin:0;">'
+      +   '简化解析后自动预生成语音稿（多一次 AI 调用，点 🎧 秒播）'
+      + '</label>'
       + '<div id="qzVoiceHint" style="font-size:11px;color:#64748b;line-height:1.5;"></div>';
     var saveBtn = panel.querySelector('button.btn-primary') || panel.querySelector('button');
     if(saveBtn) panel.insertBefore(box, saveBtn); else panel.appendChild(box);
@@ -23266,11 +23452,13 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     var edgeVoice = box.querySelector('#qzVoiceEdgeVoice');
     var volcId = box.querySelector('#qzVoiceVolcAppId');
     var volcToken = box.querySelector('#qzVoiceVolcToken');
+    var prefetchBox = box.querySelector('#qzVoicePrefetch');
     sel.value = voiceTtsConfig.provider;
     edgeUrl.value = voiceTtsConfig.edgeUrl || '';
     edgeVoice.value = voiceTtsConfig.edgeVoice || '';
     volcId.value = voiceTtsConfig.volcAppId || '';
     volcToken.value = voiceTtsConfig.volcToken || '';
+    if(prefetchBox) prefetchBox.checked = voiceTtsConfig.prefetch !== false;
 
     function commit(){
       voiceTtsConfig.provider = (sel.value === 'edge' || sel.value === 'volc') ? sel.value : 'browser';
@@ -23278,6 +23466,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       voiceTtsConfig.edgeVoice = String(edgeVoice.value || '').trim() || 'zh-CN-XiaoxiaoNeural';
       voiceTtsConfig.volcAppId = String(volcId.value || '').trim();
       voiceTtsConfig.volcToken = String(volcToken.value || '').trim();
+      if(prefetchBox) voiceTtsConfig.prefetch = !!prefetchBox.checked;
       saveVoiceTtsConfig();
       syncEngineFields();
     }
@@ -23286,8 +23475,58 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       el.addEventListener('change', commit);
       el.addEventListener('blur', commit);
     });
+    if(prefetchBox) prefetchBox.addEventListener('change', commit);   // 勾选框只在 change 上有意义
     syncEngineFields();
     return true;
+  }
+
+  /* ---------- 12b. 预生成：点完「AI 简化解析」顺手把口语稿写好，下次点 🎧 直接秒播 ----------
+     这一步只多花一次「改写」的 AI 调用（输入是本机已有的简化解析，不重新解题），
+     换来的是最常用的那条路径（先简化解析、再点讲解）从「等十几秒」变成「点开就念」。
+     不想多花额度可在语音设置里关掉。 */
+  var prefetched = {};
+  function prefetchVoiceScript(key){
+    if(!key || prefetched[key]) return;
+    if(voiceTtsConfig.prefetch === false) return;
+    prefetched[key] = true;
+    readCache(key).then(function(cached){
+      if(cached && cached.t) return null;         // 已有稿子，别再花一次 AI
+      return resolveItem(key).then(function(item){
+        if(!item) return null;
+        return pickExistingAnalysis(key, item).then(function(existing){
+          if(!existing.text || existing.origin !== 'simplify') return null;   // 只对「有简化解析」的题预生成
+          return rewriteToSpoken(item, existing.text).then(function(script){
+            if(!script) return null;
+            return writeCache(key, script, 'simplify').then(function(){
+              console.log('[VOICE] 已预生成讲解稿：' + key);
+            });
+          });
+        });
+      });
+    }).catch(function(err){
+      console.warn('[VOICE] 预生成讲解稿失败（不影响正常使用）：', err && (err.message || err));
+    });
+  }
+
+  // 包装 simplifySolution：等它把 type==='simplify' 的历史写完（流式落库，最多等 4 秒）再预生成
+  function installSimplifyPrefetch(){
+    if(typeof window.simplifySolution !== 'function' || window.simplifySolution.__qzVoiceWrapped) return;
+    var orig = window.simplifySolution;
+    var wrapped = function(key){
+      var ret = orig.apply(this, arguments);
+      var tries = 0;
+      (function waitHistory(){
+        tries++;
+        Promise.resolve().then(function(){ return getAIHistory(key); }).then(function(list){
+          var has = Array.isArray(list) && list.some(function(m){ return m && m.type === 'simplify' && m.content; });
+          if(has){ prefetchVoiceScript(key); return; }
+          if(tries < 8) setTimeout(waitHistory, 500);
+        }).catch(function(){});
+      })();
+      return ret;
+    };
+    wrapped.__qzVoiceWrapped = true;
+    window.simplifySolution = wrapped;
   }
 
   /* ---------- 13. 样式：只补「状态色 / 加载态」，尺寸规则全部沿用 .q-copy-btn ---------- */
@@ -23310,6 +23549,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
   function boot(){
     installStyle();
     installVoiceSettingsPanel();
+    installSimplifyPrefetch();
     scan();
     var content = document.getElementById('content');
     if(content && window.MutationObserver){
@@ -23340,6 +23580,8 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       }).catch(function(){ return false; });
     },
     _placeVoiceButton: placeVoiceButton,
+    _installSimplifyPrefetch: installSimplifyPrefetch,
+    _prefetch: prefetchVoiceScript,
     _state: voiceState
   };
 

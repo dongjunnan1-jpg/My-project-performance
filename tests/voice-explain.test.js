@@ -97,6 +97,8 @@ function makeEnv(options = {}) {
   // jsdom 不实现 SpeechSynthesisUtterance：必须补桩，否则 speakBrowser 会走「不支持」分支
   function FakeUtterance(text) { this.text = text; }
   win.SpeechSynthesisUtterance = FakeUtterance;
+  win.TextDecoder = TextDecoder;   // jsdom 未实现，流式解码要用
+  win.TextEncoder = TextEncoder;
 
   win.speechSynthesis = {
     speaking: false,
@@ -122,7 +124,19 @@ function makeEnv(options = {}) {
   FakeAudio.prototype.removeAttribute = function () { this.src = ''; };
   win.Audio = FakeAudio;
 
+  // 三路 fetch 必须区分开：
+  //   · AI 流式改写（body 带 stream:true）→ options.streamFetch，默认失败（退回 requestAI 桩）
+  //   · TTS 网关（body 带 text/voice）      → options.fetch
+  //   否则 Edge 用例里的音频桩会被 AI 请求先吃掉，调用序号全错位。
   win.fetch = function (url, init) {
+    let isAiStream = false;
+    try { isAiStream = !!JSON.parse((init && init.body) || '{}').stream; } catch (e) {}
+    if (isAiStream) {
+      calls.fetchAI = calls.fetchAI || [];
+      calls.fetchAI.push({ url, init });
+      if (options.streamFetch) return options.streamFetch(url, init);
+      return Promise.reject(new Error('offline'));
+    }
     calls.fetch.push({ url, init });
     if (options.fetch) return options.fetch(url, init);
     return Promise.reject(new Error('offline'));
@@ -416,4 +430,137 @@ test('提示是真正可见的 DOM（工程里没有全局 mlToast 时也不能�
   assert.match(tip.textContent, /已用原解析播报/);
   assert.equal(tip.style.position, 'fixed');
   assert.equal(calls.speak.length, 1, '提示的同时仍要用原解析播报');
+});
+
+test('流式改写：首句一到就出声，不等全文（这是「等待太长」的核心修法）', async () => {
+  const enc = new TextEncoder();
+  const frames = [
+    'data: {"choices":[{"delta":{"content":"这道题考的是行政处罚的设定权限。"}}]}\n',
+    'data: {"choices":[{"delta":{"content":"正确答案是 C。"}}]}\n',
+    'data: {"choices":[{"delta":{"content":"行政法规可以设定除限制人身自由以外的处罚。"}}]}\n',
+    'data: [DONE]\n'
+  ];
+  let idx = 0;
+  const { win, calls } = makeEnv({
+    streamFetch: () => Promise.resolve({
+      ok: true,
+      status: 200,
+      body: {
+        getReader() {
+          return {
+            read() {
+              if (idx >= frames.length) return new Promise((r) => setTimeout(() => r({ done: true }), 40));
+              const f = frames[idx++];
+              return new Promise((r) => setTimeout(() => r({ done: false, value: enc.encode(f) }), 30));
+            }
+          };
+        }
+      }
+    })
+  });
+  addAttemptsAndCopy(win, true);
+  const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+
+  await waitFor(() => calls.speak.length >= 1);
+  assert.match(calls.speak[0].text, /^这道题考的是/, '第一句应该是开头那句');
+  assert.ok(calls.speak.length <= 2, '此时全文只到了一两句，不能等整段写完再播');
+
+  await waitFor(() => calls.speak.length >= 3);
+  const spoken = calls.speak.map((s) => s.text).join('');
+  assert.match(spoken, /正确答案是 C/);
+  assert.match(spoken, /行政法规可以设定/);
+  assert.equal(win.qzVoice._state.status, 'playing');
+  assert.equal(win.qzVoice._state.source, 'ai');
+  assert.equal(calls.speak.length, 3, '三句应各是一个 utterance（按句播，不是一个超长句）');
+});
+
+test('流式改写：句子按标点切分，长句在逗号处断开（不出现几十字的整段）', async () => {
+  const enc = new TextEncoder();
+  const long = '我们来看这道题，A 项说的是行政处罚只能由违法行为人所在地管辖，这个说法其实不对，因为管辖看的是违法行为发生地，注意这里有个坑，很多同学会选 A，但选项写的是“所在地”。';
+  const frames = ['data: ' + JSON.stringify({ choices: [{ delta: { content: long } }] }) + '\n', 'data: [DONE]\n'];
+  let idx = 0;
+  const { win, calls } = makeEnv({
+    streamFetch: () => Promise.resolve({
+      ok: true,
+      status: 200,
+      body: {
+        getReader() {
+          return {
+            read() {
+              if (idx >= frames.length) return new Promise((r) => setTimeout(() => r({ done: true }), 20));
+              const f = frames[idx++];
+              return new Promise((r) => setTimeout(() => r({ done: false, value: enc.encode(f) }), 10));
+            }
+          };
+        }
+      }
+    })
+  });
+  addAttemptsAndCopy(win, true);
+  const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await waitFor(() => calls.speak.length >= 2);
+  calls.speak.forEach((s) => {
+    assert.ok(s.text.length <= 48, '每段不应超过 48 字，实际 ' + s.text.length + '：' + s.text);
+  });
+});
+
+test('流式不可用（服务不支持 SSE）→ 自动退回整段 requestAI，不报错', async () => {
+  const { win, calls } = makeEnv({
+    streamFetch: () => Promise.resolve({ ok: false, status: 500 })
+  });
+  addAttemptsAndCopy(win, true);
+  const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await waitFor(() => calls.speak.length === 1);
+  assert.match(calls.speak[0].text, /^这道题考的是定义判断/, '应退回整段改写结果');
+  assert.ok(calls.warn.some((w) => /流式改写失败/.test(w)));
+  assert.equal(calls.speak.length, 1, '退回整段后只念一次，不能重复');
+});
+
+test('流式生成中途切题 → abort 请求并停止入队，不留残余声音', async () => {
+  const enc = new TextEncoder();
+  let aborted = false;
+  const { win, calls } = makeEnv({
+    streamFetch: (url, init) => Promise.resolve({
+      ok: true,
+      status: 200,
+      body: {
+        getReader() {
+          return {
+            read() {
+              return new Promise((resolve, reject) => {
+                if (init && init.signal) {
+                  init.signal.addEventListener('abort', () => { aborted = true; reject(new Error('AbortError')); });
+                }
+                setTimeout(() => resolve({ done: false, value: enc.encode('data: {"choices":[{"delta":{"content":"第一句。"}}]}\n') }), 20);
+              });
+            }
+          };
+        }
+      }
+    })
+  });
+  addAttemptsAndCopy(win, true);
+  const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await waitFor(() => calls.speak.length >= 1);
+  win.goPage(2);                       // 切页 → 包装函数里 voiceStop()
+  assert.equal(win.qzVoice._state.status, 'idle');
+  assert.ok(aborted, '在途的流式请求必须被 abort，不能继续吃网络');
+  const n = calls.speak.length;
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(calls.speak.length, n, '切题后不应再往语音队列塞新句子');
+});
+
+test('预生成：点完「AI 简化解析」就把口语稿写好，点 🎧 时直接命中缓存', async () => {
+  const { win, calls } = makeEnv({ history: [{ role: 'assistant', type: 'simplify', content: '【正确答案】A。甲项正确，乙项错误。' }] });
+  win.simplifySolution = function () { return Promise.resolve('done'); };
+  win.qzVoice._installSimplifyPrefetch();
+  win.simplifySolution('f1_q0');
+  await waitFor(() => !!calls.requestAIPayload, 3000);
+  assert.match(calls.requestAIPayload.messages[0].content, /语音讲解/, '预生成用的应是同一套口语稿提示词');
+  assert.equal(calls.speak.length, 0, '预生成不应出声');
+  assert.equal(typeof win.qzVoice._prefetch, 'function');
 });
