@@ -5381,7 +5381,7 @@ async function assertAnsweredStateReadyForBodyRelease(){
 //          normalizeModuleName 那层「显示用归一化」留到消费端做，builder 不预归一化）
 //     s  = q.subCategory（二级题型筛选）
 //     l  = q.leafCategory（三级题型筛选）
-//     y  = qzYears(p) 的输出 '|2024年|2025年'（年份筛选；从 source 正则提取，只算一次）
+//     y  = qzYears(p) 的输出 '|2024年'（年份筛选；从 source 提取主年份，只算一次）
 //     p  = testProvince(source)（省份筛选）
 //     r  = getQuestionCorrectRatio(q)（正确率排序 / 正确率区间筛选）
 //   明确**排除** ——
@@ -5406,12 +5406,46 @@ const META_INCLUDE_SEARCH_TEXT = false;
 function metaKey(zone, fileId){ return META_PREFIX + zone + ':' + fileId; }
 function metaNowMs(){ return (typeof performance!=='undefined' && performance.now) ? performance.now() : Date.now(); }
 
-// 与 qzYears(p) 逐字等价（'|2024年|2025年'），但**不写回原题对象**（builder 不许改 file）。
-function metaYearsIn(source){
-  const s = String(source||''), re = /(\d{4})年/g;
-  let out = '', m;
-  while((m = re.exec(s))) out += '|' + m[1] + '年';
+// ============================================================
+// [FIX 20261023] source → 年份 token 数组（去重、保序）。年份下拉、年份筛选、meta 索引
+// 三处必须共用这一个口径，否则「下拉里能选的年份」和「筛选真正命中的题」会错位。
+// ------------------------------------------------------------
+// 旧口径只认「YYYY年」。但模考题库大量 source 长这样：
+//   「2026下半年省考第二十九季行测模考大赛（天津卷）第15题」
+// 年份后面跟的是「下半年」而不是「年」，于是这些题被判成「无年份」：
+//   · 年份下拉只剩少量带「年」的来源；
+//   · 按年份筛选时它们被整体过滤掉。
+// 实测（粉笔模考_政治理论_6808题.json）：6808 题里只有 1483 题带「YYYY年」，
+// 剩下 5325 题全部落在「2026/2025下半年…」「2026广东…终极模考大赛」这类写法上
+// ⇒ 各年份题数相加只有 1483，永远凑不齐 6808。默认顺序不按 source 过滤，所以总数是对的。
+// 现口径与排序用的 extractYear() 对齐：任何独立的 20xx 四位数字都算年份。
+// 防误判：前后紧邻数字的长串（如 20260724）不切；紧跟「第」的题号不认。
+// 一道题只归入一个年份（取 source 里第一个年份 token），因此
+// 「各年份题数 + 未标注年份 == 分区总题数」恒成立。
+// 若按「所有出现过的年份」做并集，"2026下半年/2027上半年…" 这类卷会被两个年份各算一次，
+// 反而让合计超过总数（实测 综应/事业单位 少量题属于这种写法）。
+function primaryYearOf(source){
+  var ys = extractYearTokens(source);
+  return ys.length ? ys[0] : '';
+}
+function extractYearTokens(source){
+  var s = String(source||''), out = [], m, re = /(?:19|20)\d{2}/g;
+  while((m = re.exec(s))){
+    var start = m.index, end = start + m[0].length, y = parseInt(m[0], 10);
+    if(start > 0 && s.charAt(start-1) >= '0' && s.charAt(start-1) <= '9') continue;
+    if(end < s.length && s.charAt(end) >= '0' && s.charAt(end) <= '9') continue;
+    if(s.charAt(start-1) === '第') continue;            // 「第2024题」是题号，不是年份
+    if(y < 2000 || y > 2035) continue;                  // 考试年份合理区间
+    var key = String(y);
+    if(out.indexOf(key) < 0) out.push(key);
+  }
   return out;
+}
+
+// 与 qzYears(p) 逐字等价（'|2024年'，无年份时为 ''），但**不写回原题对象**（builder 不许改 file）。
+function metaYearsIn(source){
+  const y = primaryYearOf(source);
+  return y ? ('|' + y + '年') : '';
 }
 
 // 单题元数据。q 只读；paperInfo 仅 sl/zy 传入。
@@ -7501,13 +7535,12 @@ function releasePreparedZone(zone){
 //    也不会像旧代码那样每次筛选/排序都重算一遍（旧实现的搜索文本缓存
 //    因为每次 {...q} 建新对象而 100% 失效，实测同一关键词连续搜索耗时完全不下降）。
 
-// 排序/年份筛选用：source 里出现的年份集合，编码成 '|2024年|2025年' 形式。
-// 与 (source||'').includes(year+'年') 完全等价，但不再重复跑正则。
+// 排序/年份筛选用：source 的**主年份**，编码成 '|2024年'（无年份时为空串）。
+// 口径由 primaryYearOf()/extractYearTokens() 统一，覆盖「2026下半年…」这类没有「年」字的写法。
 function qzYears(p){
   if(p._qzYears===undefined){
-    var s=String(p.source||''), out='', m, re=/(\d{4})年/g;
-    while((m=re.exec(s))) out += '|' + m[1] + '年';
-    p._qzYears = out;
+    var y=primaryYearOf(p.source);
+    p._qzYears = y ? ('|' + y + '年') : '';
   }
   return p._qzYears;
 }
@@ -8346,7 +8379,11 @@ function getFilterBaseQuestions(){
   const kw=normalizeSearchText(filterState.search);
   if(kw) qs=qs.filter(function(q){ return getZoneSearchText(q).indexOf(kw)>=0; });
   if(filterState.year && filterState.year!=='all'){
-    qs=qs.filter(function(q){ return (activeZone==='sl'||activeZone==='zy') ? (q._paperYear||q.year)===filterState.year : qzYears(q).indexOf('|'+filterState.year+'年')>=0; });
+    qs=qs.filter(function(q){
+      if(activeZone==='sl'||activeZone==='zy') return (q._paperYear||q.year)===filterState.year;
+      if(filterState.year==='__none__') return qzYears(q)==='';   // 「未标注年份」桶
+      return qzYears(q).indexOf('|'+filterState.year+'年')>=0;
+    });
   }
   if(filterState.province && filterState.province!=='all'){
     qs=qs.filter(function(q){ return (activeZone==='sl'||activeZone==='zy') ? (q._paperProvince||q.province||'其他')===filterState.province : qzProv(q)===filterState.province; });
@@ -8546,6 +8583,10 @@ function updateFilterOptions() {
   }
     var years = new Set();
     var sourceCount = {};
+    // [FIX 20261023] 年份选项的题数：与年份筛选同一口径（extractYearTokens），
+    // 保证「各年份题数之和 == 分区总题数」（除真正没有任何年份信息的题，单列为「未标注年份」）。
+    var yearCount = {};
+    var noYearCount = 0;
     // 正确率区间题数：统一由 refreshRatioRangeOptions() 按「除正确率区间自身以外的全部筛选」统计
     // （函数末尾调用，保证与三级题型的联动计数口径一致）
 
@@ -8562,10 +8603,12 @@ function updateFilterOptions() {
 
             if (!sourceCount[cleanSrc]) sourceCount[cleanSrc] = 0;
             sourceCount[cleanSrc]++;
-
-            var yearMatch = src.match(/(\d{4})年/);
-            if (yearMatch) years.add(yearMatch[1]);
         }
+        // 年份与「来源下拉」无关，空 source 也要计入「未标注年份」
+        var yearToken = primaryYearOf(src);
+        if (!yearToken) { noYearCount++; return; }
+        years.add(yearToken);
+        yearCount[yearToken] = (yearCount[yearToken] || 0) + 1;
     });
 
     if (activeZone === 'mk' && years.size < 2) {
@@ -8586,8 +8629,10 @@ function updateFilterOptions() {
     var yearArray = [...years].sort(function(a, b) { return b - a; });
     yearFilter.innerHTML = '<option value="all">全部年份</option>' + 
         yearArray.map(function(y) {
-            return '<option value="' + y + '">' + y + '年</option>';
-        }).join('');
+            // [FIX 20261023] 选项带题数：用户可直接核对「各年份相加 == 总数」
+            return '<option value="' + y + '">' + y + '年（' + (yearCount[y] || 0) + '题）</option>';
+        }).join('') +
+        (noYearCount > 0 ? '<option value="__none__">未标注年份（' + noYearCount + '题）</option>' : '');
 
     yearFilter.value = 'all';
     filterState.year = 'all';
@@ -9047,9 +9092,15 @@ function getFiltered(skipSort){
   if(kw)
     qs=qs.filter(q=>getZoneSearchText(q).indexOf(kw)>=0);
 
-  // 年份（口径：source 中含 '<year>年'；改用预先摘出的年份集合，等价且不再跑正则）
+  // 年份（口径：source 中出现的年份集合，由 extractYearTokens() 统一提取；
+  //         '__none__' 为「未标注年份」桶，用来承接 source 里根本没有年份的题，
+  //         保证「各年份题数 + 未标注 == 分区总题数」）
   if(filterState.year!=='all'){
-    qs=qs.filter(q=>qzYears(q).indexOf('|'+filterState.year+'年')>=0);
+    if(filterState.year==='__none__'){
+      qs=qs.filter(q=>qzYears(q)==='');
+    }else{
+      qs=qs.filter(q=>qzYears(q).indexOf('|'+filterState.year+'年')>=0);
+    }
   }
 
   // 省份
@@ -12428,7 +12479,7 @@ function findQuestionByFingerprint(contentPrefix, optionsPrefix, answer){
 function buildExportName(tag){
   const parts=[tag||'', zoneName(activeZone)];
   if(filterState.module!=='all') parts.push(filterState.module);
-  if(filterState.year!=='all') parts.push(filterState.year+'年');
+  if(filterState.year!=='all') parts.push(filterState.year==='__none__' ? '未标注年份' : filterState.year+'年');
   if(filterState.source!=='all') parts.push(filterState.source);
   const sm={unanswered:'未做',answered:'已做',wrong:'错题',correct:'做对'};
   if(filterState.status!=='all') parts.push(sm[filterState.status]);

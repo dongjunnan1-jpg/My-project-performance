@@ -123,6 +123,9 @@ function createHarness(options = {}) {
     'removeAnswerTimesForQuestions',
     'idbDeleteZoneFiles',
     'clearZoneFilesInBatches',
+    // updateFilterOptions 依赖它统计年份题数（年份下拉选项带「N题」）
+    'primaryYearOf',
+    'extractYearTokens',
     'updateFilterOptions',
     'renderAll',
     'switchZone',
