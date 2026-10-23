@@ -69,7 +69,7 @@
   var RING_R = 10.6, RING_C = 2 * Math.PI * RING_R;
 
   /* ---------- 3. 运行时状态（同一时间只允许一题在播） ---------- */
-  var voiceState = { key:null, status:'idle', text:'', source:'', audio:null, objectUrl:null, utterance:null, speaker:null };
+  var voiceState = { key:null, status:'idle', text:'', source:'', audio:null, objectUrl:null, utterance:null, speaker:null, heard:false };
   var playToken = 0;                            // 播放会话令牌：任何异步回来先验令牌，过期直接丢弃
 
   /* ---------- 0b. 播放权限「解锁」 ----------
@@ -299,6 +299,7 @@
     releaseAudio();
     voiceState.key = null; voiceState.text = ''; voiceState.source = '';
     voiceState.status = 'idle'; voiceState.utterance = null; voiceState.speaker = null;
+    voiceState.heard = false;
     progressHide();
     refreshButtons();
   }
@@ -457,11 +458,16 @@
         if(audio.__playSeq !== mySeq) return;
         if(token !== undefined && token !== playToken) return;
         gotPlaying = true;
+        voiceState.heard = true;                  // 「已经出过声」：后面的某一句失败时据此决定「跳过」而不是掐断
         setStatus('playing');                     // 出声了才从「等待环」切到播放态
         progressDone();
       };
       audio.onended = function(){
-        if(audio.__playSeq !== mySeq || !gotPlaying) return;
+        if(audio.__playSeq !== mySeq) return;
+        // 极短音频在个别 WebView 上可能没派发 playing 就直接 ended：currentTime > 0 也算真放过。
+        // 上一段的迟到 ended 此时 src 已换、currentTime 为 0，不会误判。
+        if(!gotPlaying && audio.currentTime > 0.05) gotPlaying = true;
+        if(!gotPlaying) return;
         resolve('ended');
       };
       audio.onerror = function(){
@@ -614,11 +620,46 @@
   }
 
   // 统一取音频 Blob：browser 走 speechSynthesis，没有 blob（返回 null）
-  function fetchTtsBlob(text){
-    var provider = voiceTtsConfig.provider || 'browser';
+  function fetchTtsBlobOnce(text, provider){
     if(provider === 'edge') return fetchEdgeBlob(text);
     if(provider === 'volc') return fetchVolcBlob(text);
     return Promise.resolve(null);
+  }
+
+  /* TTS 并发闸门 + 失败重试一次
+     [VOICE 2026-10-23h] 用户反馈「正说着突然就停了」。长讲解会被切成十几句，
+     原来 say() 每来一句就立刻发一个请求 —— 十几发并发打过去很容易被服务端限流
+     （火山 2.0 的并发配额很小），后面那几句拿回 4xx/5xx，流水线就把整段讲解掐断了。
+     这里两件事：最多 2 个并发（其余排队），失败自动重试一次；
+     鉴权类错误（key 不对）不重试 —— 重试也没用，只会拖慢报错。 */
+  var TTS_MAX = 2, ttsBusy = 0, ttsQueue = [];
+
+  function ttsSlot(){
+    if(ttsBusy < TTS_MAX){ ttsBusy += 1; return Promise.resolve(); }
+    return new Promise(function(res){ ttsQueue.push(res); });
+  }
+  function ttsFree(){
+    var next = ttsQueue.shift();
+    if(next) next();                              // 名额直接转手，并发数不变
+    else ttsBusy = Math.max(0, ttsBusy - 1);
+  }
+  function isAuthErr(err){
+    var m = String((err && err.message) || '');
+    return /40[13]|Invalid X-Api-Key|app key|unauthor|forbidden/i.test(m);
+  }
+
+  function fetchTtsBlob(text){
+    var provider = voiceTtsConfig.provider || 'browser';
+    if(provider === 'browser') return Promise.resolve(null);
+    return ttsSlot().then(function(){
+      return fetchTtsBlobOnce(text, provider).catch(function(err){
+        if(isAuthErr(err)) throw err;
+        console.warn('[VOICE] TTS 失败，400ms 后重试一次：', err && (err.message || err));
+        return new Promise(function(r){ setTimeout(r, 400); }).then(function(){
+          return fetchTtsBlobOnce(text, provider);
+        });
+      });
+    }).then(function(blob){ ttsFree(); return blob; }, function(err){ ttsFree(); throw err; });
   }
   // 统一取可播放的 objectURL
   function fetchTtsAudio(text){
@@ -661,6 +702,7 @@
     voiceState.text = text;
     voiceState.source = source || '';
     voiceState.speaker = null;                  // 整段播放，不走流式流水线
+    voiceState.heard = false;
     releaseAudio();
     refreshButtons();
     // 注意：这里**先不切 playing** —— 云端引擎还要合成首句，切换权交给「真正出声」那一刻
@@ -1095,6 +1137,7 @@
     var queue = [], cursor = 0, running = false, closed = false, started = false, dead = false;
     var urls = [];
     var pendingResume = null;                     // 被自动播放拦住时，挂起「这一段 + 后面继续」
+    var skipped = 0;                              // 中途有几句话没合成出来（跳过，不掐断整段）
 
     function revokeAll(){
       urls.forEach(function(u){ try{ URL.revokeObjectURL(u); }catch(e){} });
@@ -1116,7 +1159,11 @@
         if(dead || token !== playToken){ running = false; return; }
         if(cursor >= queue.length){
           running = false;
-          if(closed){ revokeAll(); voiceStop(); }        // 全部念完 → 归位
+          if(closed){                                  // 全部念完 → 归位
+            revokeAll();
+            if(skipped) toast('有 ' + skipped + ' 句没合成出来，已跳过');
+            voiceStop();
+          }
           return;
         }
         var item = queue[cursor++];
@@ -1145,6 +1192,15 @@
           next();
         }).catch(function(err){
           if(dead || (err && err.__autoplay)) return;    // 挂起等用户点，不当作失败
+          // 已经出过声了：某一句没合成出来 → 跳过这一句继续往下念，绝不把整段讲解砍断
+          //（用户听到的就是「正说着突然停了」，其实只是第 N 句挂了）
+          if(voiceState.heard && token === playToken){
+            skipped += 1;
+            if(skipped >= 3){ fail(err); return; }      // 连着三句都挂 = 网络/额度真断了，别再装作还在念
+            console.warn('[VOICE] 第 ' + cursor + ' 句合成失败，跳过继续：', err && (err.message || err));
+            next();
+            return;
+          }
           fail(err);
         });
       })();
@@ -1152,7 +1208,11 @@
     return {
       say: function(chunk){
         if(!chunk || dead || token !== playToken) return;
-        queue.push({ text: chunk, url: fetchTtsAudio(chunk) });   // 立刻发起合成（预取），播放按顺序
+        // 先把合成请求发出去（预取）。注意这里挂一个空 catch：这一句可能在本段还没轮到播放时
+        // 就失败了，若不先挂上 handler，浏览器/Node 会报「未处理的 Promise 拒绝」。
+        var urlP = fetchTtsAudio(chunk);
+        urlP.catch(function(){});
+        queue.push({ text: chunk, url: urlP });
         pump();
       },
       finish: function(){ closed = true; pump(); },
@@ -1207,11 +1267,12 @@
     voiceState.speaker = speaker;                 // 被自动播放拦住时，续播要靠它把后面的段落接上
     // 卡住保护：模型中途 15 秒不出新字（掉线/被判风控/网关挂住）→ 主动 abort 收尾，
     // 不能让语音停在半句上、按钮一直转圈。
-    var idleTimer = 0;
+    var idleTimer = 0, idleAborted = false;
     function armIdle(){
       clearTimeout(idleTimer);
       idleTimer = setTimeout(function(){
         if(token !== playToken) return;
+        idleAborted = true;
         console.warn('[VOICE] 流式改写 15 秒无新内容，主动收尾');
         try{ if(ctrl) ctrl.abort(); }catch(e){}
       }, 15000);
@@ -1253,7 +1314,12 @@
       if(streamCtrl === ctrl) streamCtrl = null;
       if(token !== playToken) return;
       // 已经出声过就不再整段重来，否则同一道题会被念两遍；只把队列收尾
-      if(speaker.isStarted()){ speaker.finish(); return; }
+      if(speaker.isStarted()){
+        speaker.finish();
+        // 但要说清楚为什么停：AI 半路卡死 → 用户听到的是「说着说着没声了」
+        if(idleAborted) toast('AI 生成卡住了，先播到这里');
+        return;
+      }
       throw err;
     });
   }
@@ -1364,6 +1430,7 @@
     return btn;
   }
 
+  var missingSince = 0, missingTimer = 0;
   function scan(){
     var content = document.getElementById('content');
     if(!content) return;
@@ -1371,10 +1438,23 @@
       var key = String(q.id || '').replace(/^q-/, '');
       if(key) placeVoiceButton(q, key);
     });
-    // 正在播的题已随翻页/筛选消失 → 立即停，不留残音
-    if(voiceState.status !== 'idle' && voiceState.key && !document.getElementById('q-' + voiceState.key)){
-      voiceStop();
+    // 正在播的题已随翻页/筛选消失 → 停，不留残音。
+    // [VOICE 2026-10-23h] 但不能「一消失就停」：答题、收藏、切筛选都会整段重渲染 HTML，
+    // 节点会短暂消失几十毫秒，以前这里直接 voiceStop 就是用户说的「正说着突然停了」。
+    // 现在给 2.5 秒宽限（并到点复核一次，因为没有后续 mutation 也要能收尾）。
+    if(voiceState.status === 'idle' || !voiceState.key){ missingSince = 0; return; }
+    if(document.getElementById('q-' + voiceState.key)){ missingSince = 0; return; }
+    if(!missingSince){
+      missingSince = Date.now();
+      clearTimeout(missingTimer);
+      missingTimer = setTimeout(function(){ missingTimer = 0; scan(); }, 2600);
+      return;
     }
+    if(Date.now() - missingSince < 2500) return;
+    missingSince = 0;
+    clearTimeout(missingTimer);
+    missingTimer = 0;
+    voiceStop();
   }
 
   var scheduled = false;
@@ -1765,7 +1845,11 @@
     if(batchRunning) return;
     if(!batchEnabled()){ batchQueue.length = 0; return; }
     if(!batchQueue.length) return;
-    if(voiceState.status === 'loading'){ setTimeout(batchPump, 1000); return; }   // 让路
+    // 让路：前台正在等稿或在放音时，后台别来抢 TTS 并发名额（抢了会让句子之间卡顿、听着像断片）
+    if(voiceState.status === 'loading' || voiceState.status === 'playing'){
+      setTimeout(batchPump, 1200);
+      return;
+    }
     var key = batchQueue.shift();
     if(!key || batchDone[key]){ batchPump(); return; }
     batchDone[key] = true;

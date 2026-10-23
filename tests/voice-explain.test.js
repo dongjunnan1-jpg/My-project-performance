@@ -124,6 +124,8 @@ function makeEnv(options = {}) {
   }
   FakeAudio.prototype.play = function () {
     this.played = true;
+    win.__playLog = win.__playLog || [];
+    win.__playLog.push(String(this.src || ''));      // 记下每次 play 的音源（单例 <audio> 下要用它数「播了几段」）
     // 模拟自动播放策略：用例把 win.__failPlay 设成 "NotAllowedError" 就能让「下一次真音频」被拒
     if (this.src && /^blob:/.test(this.src) && win.__failPlay) {
       const name = win.__failPlay;
@@ -428,7 +430,7 @@ test('Edge TTS 返回非音频 → 同样停住，不退回浏览器语音', asy
   await waitFor(() => calls.warn.some((w) => /不是音频/.test(w)));
   assert.equal(calls.speak.length, 0);
   assert.equal(win.__blobPlays().length, 0, "失败时不该播放任何音频");
-  assert.equal(win.qzVoice._state.status, 'idle');
+  await waitFor(() => win.qzVoice._state.status === 'idle', 3000);   // 有一次 400ms 重试，归位会稍晚
 });
 
 test('Edge TTS 成功 → 用 Audio 播放返回的音频 blob，不走浏览器语音', async () => {
@@ -833,6 +835,89 @@ test('播放被系统拦截（NotAllowedError）→ 不误报合成失败，按�
   assert.equal(win.__blobPlays().length, 1);
 });
 
+function sseReader(frames) {
+  const enc = new TextEncoder();
+  let idx = 0;
+  return () => Promise.resolve({
+    ok: true,
+    status: 200,
+    body: {
+      getReader() {
+        return {
+          read() {
+            if (idx >= frames.length) return new Promise((r) => setTimeout(() => r({ done: true }), 30));
+            const f = frames[idx++];
+            return new Promise((r) => setTimeout(() => r({ done: false, value: enc.encode(f) }), 10));
+          }
+        };
+      }
+    }
+  });
+}
+
+test('流式播报：中间某一句合成失败 → 跳过它继续念，不把整段掐断', async () => {
+  const TXT = '第一句话讲的是行政处罚的设定权限。第二句话讲的是到底由谁来实施。第三句话总结这个考点。';
+  const frames = [
+    'data: ' + JSON.stringify({ choices: [{ delta: { content: TXT } }] }) + '\n',
+    'data: [DONE]\n'
+  ];
+  let broken = 0;
+  const { win, calls } = makeEnv({
+    streamFetch: sseReader(frames),
+    fetch: (url, init) => {
+      let text = '';
+      try { text = JSON.parse(init.body).text; } catch (e) {}
+      if (text.indexOf('第二句') >= 0) {          // 这一句永远合成失败（含自动重试）
+        broken += 1;
+        return Promise.reject(new Error('45000010 服务端限流'));
+      }
+      return Promise.resolve({
+        ok: true,
+        headers: { get: () => 'audio/mpeg' },
+        blob: () => Promise.resolve({ size: 40960 })
+      });
+    }
+  });
+  win.qzVoice.config.provider = 'edge';
+  win.qzVoice.config.edgeUrl = 'https://ok.workers.dev/tts';
+  addAttemptsAndCopy(win, true);
+  const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+
+  const blobPlays = () => (win.__playLog || []).filter((x) => /^blob:/.test(x)).length;
+  await waitFor(() => blobPlays() >= 1, 8000);
+  // 假 Audio 不会自己结束，手动「播完」这一段，流水线才会走到下一句
+  const cur = calls.audio[calls.audio.length - 1];
+  if (typeof cur.onended === 'function') cur.onended();
+  await waitFor(() => blobPlays() >= 2, 8000);   // 第二句失败被跳过 → 第三句照常播
+  assert.ok(broken >= 2, '失败那句应重试过一次：' + broken);
+  assert.ok(!calls.toast.some((t) => /合成失败/.test(t)), '不能把整段判成失败：' + JSON.stringify(calls.toast));
+  assert.equal(calls.speak.length, 0, '仍然不许退回浏览器语音');
+});
+
+test('播放中列表重渲染（题目节点短暂消失）不该停播；消失了 3 秒以上才停', async () => {
+  const { win } = makeEnv({ streamFetch: () => new Promise(() => {}) });
+  addAttemptsAndCopy(win, true);
+  const doc = win.document;
+  const el = doc.getElementById('q-f1_q0');
+  const btn = win.qzVoice._placeVoiceButton(el, 'f1_q0');
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  assert.equal(win.qzVoice._state.status, 'loading');
+
+  // ① 节点被整段重渲染带走 300ms 再放回来 → 不许停
+  el.remove();
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(win.qzVoice._state.status, 'loading', '重渲染的空窗期不该停播');
+  doc.getElementById('content').appendChild(el);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(win.qzVoice._state.status, 'loading', '节点回来后应继续');
+
+  // ② 一直不回来（真翻页/真筛选）→ 2.5 秒后兜底停
+  el.remove();
+  await new Promise((r) => setTimeout(r, 3200));
+  assert.equal(win.qzVoice._state.status, 'idle', '长时间消失要停，不留残音');
+});
+
 test('音频缓存命中 → 直接播，连 TTS 都不请求', async () => {
   const env = makeEnvWithQuestions({ provider: 'edge' });
   const { win, calls } = env;
@@ -871,6 +956,7 @@ test('后台预生成：听完一题就在后台备好后面 N 题（不发声�
   await waitFor(() => win.qzVoice._state.status === 'playing');   // 第一题先正常播
 
   const before = calls.speak.length;
+  win.qzVoice.stop();                       // 前台放音时后台会让路，这里先停掉再验批量
   win.qzVoice._batch.run('f1_q0');
   await waitFor(
     () => ['f1_q1', 'f1_q2', 'f1_q3'].every((k) => env.store['en_voice_audio_' + k]),
