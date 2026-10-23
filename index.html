@@ -4379,6 +4379,13 @@ function toggleAutoSolution(){
   updateAutoSolutionBtnState();
 }
 // 手动展开 / 收起某题的解析（关闭自动解析后使用；复盘模式的 DOM 结构相同，可复用）
+// [2026-10-24 修复「收起解析后视口跑到后面几道题上」]
+// 解析块是 display:none ⇄ block，高度落差可达上千 px。旧实现只切 class：文档 scrollTop 原地不动，
+// 题卡自身高度一塌陷，视口里剩下的就是题卡下方「后面好几道题」——用户看到的就不再是他做的那道题。
+// 现在切完之后检查这张题卡还剩多少露在视口里：
+//   可见高度 < min(视口 40%, 题卡身高) → 把题卡顶边对齐到视口顶部（顶边留 12px 呼吸位）；
+//   露出充足 → 一律不动（展开解析时绝不能把用户硬拽回题干）。
+// 用 window 滚动：本应用全文是文档级滚动（window.scrollTo / window.pageYOffset，见 scrollToFirstQuestion）。
 function toggleSolution(key){
   const el = document.getElementById('q-' + key);
   if(!el) return;
@@ -4386,8 +4393,23 @@ function toggleSolution(key){
   if(!sol) return;
   const btn = el.querySelector('.q-solution-toggle');
   const willShow = !sol.classList.contains('show');
+
+  const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+  // 临时关掉浏览器自带的 scroll anchoring：它会和下面这次的修正叠加，造成「修正过头」的抖动
+  const rootStyle = document.documentElement.style;
+  const prevAnchor = rootStyle.overflowAnchor;
+  rootStyle.overflowAnchor = 'none';
+
   sol.classList.toggle('show', willShow);
   if(btn) btn.textContent = willShow ? '📖 隐藏解析' : '📖 显示解析';
+
+  const rect = el.getBoundingClientRect();
+  const visible = Math.min(rect.bottom, vh) - Math.max(rect.top, 0);
+  const need = Math.min(vh * 0.4, rect.height || 0);
+  if(visible < need) window.scrollBy(0, Math.round(rect.top - 12));
+
+  const restore = function(){ rootStyle.overflowAnchor = prevAnchor || ''; };
+  if(typeof requestAnimationFrame === 'function') requestAnimationFrame(restore); else restore();
 }
 // 声明处立刻读一次：保证【首次渲染】就用上持久化的值（早于任何 renderQuestions）
 loadAutoSolutionSetting();
