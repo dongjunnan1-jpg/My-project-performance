@@ -307,20 +307,22 @@ test('AI 失败 → 用原解析兜底播报 + 提示，不抛错', async () => 
   assert.ok(calls.toast.some((t) => /已用原解析播报/.test(t)), '应提示改用原解析：' + JSON.stringify(calls.toast));
 });
 
-test('Edge TTS 失败（网络不通）→ 自动降级浏览器语音，只 warn 不弹错', async () => {
+test('Edge TTS 失败（网络不通）→ 停住 + 提示，绝不退回浏览器语音', async () => {
   const { win, calls } = makeEnv({ fetch: () => Promise.reject(new Error('net::ERR_NAME_NOT_RESOLVED')) });
   addAttemptsAndCopy(win, true);
   const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
   win.qzVoice.config.provider = 'edge';
   win.qzVoice.config.edgeUrl = 'https://bad.workers.dev/tts';
   btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
-  await waitFor(() => calls.speak.length === 1);
-  assert.match(calls.speak[0].text, /这道题考的是/);
-  assert.ok(calls.warn.some((w) => /Edge TTS 失败/.test(w)));
+  await waitFor(() => calls.warn.some((w) => /合成失败，已停止/.test(w)));
+
+  assert.equal(calls.speak.length, 0, '不许退回浏览器语音');
   assert.equal(calls.audio.length, 0);
+  assert.ok(calls.toast.some((t) => /合成失败/.test(t) && /不会再用浏览器语音/.test(t)), JSON.stringify(calls.toast));
+  assert.equal(win.qzVoice._state.status, 'idle', '失败后按钮要归位，不能一直转圈');
 });
 
-test('Edge TTS 返回非音频 → 降级浏览器语音', async () => {
+test('Edge TTS 返回非音频 → 同样停住，不退回浏览器语音', async () => {
   const { win, calls } = makeEnv({
     fetch: () => Promise.resolve({
       ok: true,
@@ -333,8 +335,10 @@ test('Edge TTS 返回非音频 → 降级浏览器语音', async () => {
   win.qzVoice.config.provider = 'edge';
   win.qzVoice.config.edgeUrl = 'https://ok.workers.dev/tts';
   btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
-  await waitFor(() => calls.speak.length === 1);
-  assert.ok(calls.warn.some((w) => /不是音频/.test(w)));
+  await waitFor(() => calls.warn.some((w) => /不是音频/.test(w)));
+  assert.equal(calls.speak.length, 0);
+  assert.equal(calls.audio.length, 0);
+  assert.equal(win.qzVoice._state.status, 'idle');
 });
 
 test('Edge TTS 成功 → 用 Audio 播放返回的音频 blob，不走浏览器语音', async () => {
@@ -628,21 +632,24 @@ test('火山：旧版 AppID + Access Token → 走 X-Api-App-Key / X-Api-Access-
   assert.equal(req.init.headers['X-Api-Access-Key'], 'tok');
 });
 
-test('火山：完全没填凭据 → 提示一次并降级浏览器语音，不发请求', async () => {
+test('火山：完全没填凭据 → 不发请求、不出声，只提示', async () => {
   const { win, calls } = makeEnv();
+  addAttemptsAndCopy(win, true);
+  const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
   win.qzVoice.config.provider = 'volc';
   win.qzVoice.config.volcApiKey = '';
   win.qzVoice.config.volcAppId = '';
   win.qzVoice.config.volcToken = '';
-  win.qzVoice.speak('没有 Key 就退回自带语音。').catch(() => {});
-  await waitFor(() => calls.speak.length === 1);
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await waitFor(() => calls.toast.length > 0);
 
   assert.equal(calls.fetch.length, 0, '没凭据不该发请求');
-  assert.ok(calls.toast.some((t) => /火山引擎还没填 API Key/.test(t)), JSON.stringify(calls.toast));
-  assert.ok(calls.warn.some((w) => /火山引擎 TTS 失败/.test(w)));
+  assert.equal(calls.speak.length, 0, '不许退回浏览器语音');
+  assert.ok(calls.toast.some((t) => /火山引擎 合成失败/.test(t)), JSON.stringify(calls.toast));
+  assert.ok(calls.warn.some((w) => /合成失败/.test(w)));
 });
 
-test('火山：返回 401 + Invalid X-Api-Key → 只 warn 并降级浏览器语音', async () => {
+test('火山：返回 401 + Invalid X-Api-Key → 停住 + 提示，不退回浏览器语音', async () => {
   const { win, calls } = makeEnv({
     fetch: () => Promise.resolve({
       ok: false,
@@ -651,11 +658,83 @@ test('火山：返回 401 + Invalid X-Api-Key → 只 warn 并降级浏览器语
       text: () => Promise.resolve('{"header":{"code":45000010,"message":"Invalid X-Api-Key"}}')
     })
   });
+  addAttemptsAndCopy(win, true);
+  const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
   win.qzVoice.config.provider = 'volc';
   win.qzVoice.config.volcApiKey = 'bad-key';
-  win.qzVoice.speak('Key 不对就别出声。').catch(() => {});
-  await waitFor(() => calls.speak.length === 1);
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await waitFor(() => calls.toast.length > 0);
 
   assert.equal(calls.audio.length, 0);
+  assert.equal(calls.speak.length, 0, '不许退回浏览器语音');
   assert.ok(calls.warn.some((w) => /Invalid X-Api-Key/.test(w)), JSON.stringify(calls.warn));
+  assert.ok(calls.toast.some((t) => /合成失败/.test(t)));
+});
+
+test('等待进度条：点开 400ms 还没出声就露出，带动画和已等秒数', async () => {
+  const { win } = makeEnv({
+    streamFetch: () => new Promise(() => {})     // 永不出字：模拟"等得久"
+  });
+  addAttemptsAndCopy(win, true);
+  const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+
+  const el = win.document.querySelector('.qz-voice-progress');
+  assert.ok(el, '应插入等待进度条');
+  const text = el.querySelector('.qz-voice-progress-text');
+  const bar = el.querySelector('.qz-voice-progress-bar');
+  assert.match(text.textContent, /正在/);
+  await new Promise((r) => setTimeout(r, 700));
+  assert.equal(el.style.opacity, '1', '300ms 后要真正显示出来');
+  assert.match(text.textContent, /s$/, '应显示已等秒数');
+  // 起步 6%，之后在 AI 段内朝 60% 渐近爬升（不能钉死不动，否则看着像卡死）
+  const w1 = parseFloat(bar.style.width);
+  assert.ok(w1 > 6, '应已开始爬升，实际 ' + bar.style.width);
+  assert.ok(w1 <= 60, 'AI 段不得超过 60%，实际 ' + bar.style.width);
+  await new Promise((r) => setTimeout(r, 700));
+  const w2 = parseFloat(bar.style.width);
+  assert.ok(w2 > w1, '应继续爬升：' + w1 + ' → ' + w2);
+  assert.ok(w2 <= 60, 'AI 段上限 60%，实际 ' + bar.style.width);
+});
+
+test('流式改写 + 云端引擎 → 用所选引擎合成，不再偷偷用浏览器声音', async () => {
+  const enc = new TextEncoder();
+  const frames = [
+    'data: {"choices":[{"delta":{"content":"这道题考的是行政处罚。"}}]}\n',
+    'data: [DONE]\n'
+  ];
+  let idx = 0;
+  const { win, calls } = makeEnv({
+    streamFetch: () => Promise.resolve({
+      ok: true,
+      status: 200,
+      body: {
+        getReader() {
+          return {
+            read() {
+              if (idx >= frames.length) return new Promise((r) => setTimeout(() => r({ done: true }), 30));
+              const f = frames[idx++];
+              return new Promise((r) => setTimeout(() => r({ done: false, value: enc.encode(f) }), 20));
+            }
+          };
+        }
+      }
+    }),
+    fetch: () => Promise.resolve({
+      ok: true,
+      headers: { get: () => 'audio/mpeg' },
+      blob: () => Promise.resolve({ size: 40960 })
+    })
+  });
+  addAttemptsAndCopy(win, true);
+  const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
+  win.qzVoice.config.provider = 'edge';
+  win.qzVoice.config.edgeUrl = 'https://ok.workers.dev/tts';
+  btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+
+  await waitFor(() => calls.audio.length >= 1);
+  assert.equal(calls.speak.length, 0, '选了 Edge 就不能再用 speechSynthesis');
+  assert.match(calls.fetch[0].url, /workers\.dev\/tts$/);
+  const body = JSON.parse(calls.fetch[0].init.body);
+  assert.match(body.text, /行政处罚/);
 });

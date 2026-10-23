@@ -93,6 +93,139 @@
     voiceState.status = status;
     refreshButtons();
   }
+
+  /* ---------- 3b. 等待进度条 ----------
+     [VOICE 2026-10-23e] 需求：点了 🎧 如果需要等（AI 写稿 / 云端合成首句），要看得见进度。
+     进度不是真实百分比（服务端不报），用两段式：AI 写稿 6→60%，合成首句 70→95%，
+     第一句出声直接跳到 100% 并淡出；同时显示已等秒数。等待 <300ms（缓存命中）不弹，
+     避免闪一下反而更闹。
+     每一段内部用「渐近爬升」（每 200ms 朝本段上限挪 6%）而不是钉死不动 —— 否则等 10 秒
+     时进度条一直停在 6%，看着比没有进度条更像卡死。 */
+  var prog = { el:null, bar:null, text:null, base:'', delay:0, tickTimer:0, startAt:0,
+               done:false, visible:false, pct:6, phaseMax:60 };
+
+  function ensureProgressEl(){
+    if(prog.el && prog.el.parentNode) return prog.el;
+    var el = document.createElement('div');
+    el.className = 'qz-voice-progress';
+    el.style.cssText = 'position:fixed;left:50%;bottom:92px;transform:translateX(-50%);z-index:100050;'
+      + 'width:min(264px,76vw);background:rgba(30,41,59,.94);color:#fff;border-radius:12px;'
+      + 'padding:10px 14px 12px;box-shadow:0 8px 24px rgba(0,0,0,.28);opacity:0;'
+      + 'transition:opacity .2s ease;pointer-events:none;';
+    var text = document.createElement('div');
+    text.className = 'qz-voice-progress-text';
+    text.style.cssText = 'font-size:12px;line-height:1.4;margin-bottom:8px;white-space:nowrap;'
+      + 'overflow:hidden;text-overflow:ellipsis;';
+    var track = document.createElement('div');
+    track.style.cssText = 'height:5px;border-radius:99px;background:rgba(255,255,255,.22);overflow:hidden;';
+    var bar = document.createElement('i');
+    bar.className = 'qz-voice-progress-bar';
+    bar.style.cssText = 'display:block;height:100%;width:0;border-radius:99px;'
+      + 'background:linear-gradient(90deg,#60a5fa,#38bdf8);transition:width .35s ease;';
+    track.appendChild(bar);
+    el.appendChild(text);
+    el.appendChild(track);
+    document.body.appendChild(el);
+    prog.el = el; prog.text = text; prog.bar = bar;
+    return el;
+  }
+
+  function progressStopTicker(){
+    clearTimeout(prog.delay);
+    clearTimeout(prog.tickTimer);
+    prog.delay = 0; prog.tickTimer = 0;
+  }
+
+  // 用递归 setTimeout 而不是 setInterval：测试环境会屏蔽 setInterval，这里也更省事
+  function progressStartTicker(){
+    clearTimeout(prog.tickTimer);
+    prog.tickTimer = 0;
+    (function tick(){
+      if(!prog.el || !prog.visible || prog.done) return;
+      var sec = ((Date.now() - prog.startAt) / 1000).toFixed(1);
+      prog.text.textContent = prog.base + ' ' + sec + 's';
+      // 渐近爬升：永远逼近本段上限但到不了，真实阶段切换时才跳上去
+      if(prog.phaseMax > prog.pct){
+        prog.pct += (prog.phaseMax - prog.pct) * 0.06;
+        prog.bar.style.width = prog.pct.toFixed(1) + '%';
+      }
+      prog.tickTimer = setTimeout(tick, 200);
+    })();
+  }
+
+  function progressReveal(){
+    if(!prog.el) return;
+    prog.visible = true;
+    prog.el.style.opacity = '1';
+    progressStartTicker();
+  }
+
+  function progressShow(base){
+    try{
+      ensureProgressEl();
+      progressStopTicker();
+      prog.base = base || '正在准备讲解…';
+      prog.startAt = Date.now();
+      prog.done = false;
+      prog.visible = false;
+      prog.pct = 6;
+      prog.phaseMax = 60;                                // AI 写稿段上限
+      prog.text.textContent = prog.base;
+      prog.bar.style.width = '6%';
+      prog.el.style.opacity = '0';                       // 先不显示，300ms 后还没出来再露头
+      prog.delay = setTimeout(progressReveal, 300);
+    }catch(e){}
+  }
+
+  function progressPhase(pct, base){
+    try{
+      if(!prog.el) return;
+      if(base) prog.base = base;
+      clearTimeout(prog.delay);
+      progressReveal();
+      prog.pct = Math.max(0, Math.min(100, pct));
+      prog.phaseMax = Math.max(prog.pct, 93);            // 新的一段：还能再爬到 93%
+      prog.bar.style.width = prog.pct + '%';
+      prog.text.textContent = prog.base;
+    }catch(e){}
+  }
+
+  function progressDone(){
+    try{
+      if(!prog.el || prog.done) return;
+      prog.done = true;
+      prog.visible = true;
+      prog.pct = 100;
+      prog.phaseMax = 100;
+      progressStopTicker();
+      prog.bar.style.width = '100%';
+      prog.text.textContent = '开始播放';
+      setTimeout(function(){
+        try{ if(prog.el) prog.el.style.opacity = '0'; }catch(e){}
+      }, 260);
+      setTimeout(function(){
+        try{ if(prog.el) prog.bar.style.width = '0%'; }catch(e){}
+      }, 900);
+    }catch(e){}
+  }
+
+  function progressHide(){
+    try{
+      if(!prog.el) return;
+      progressStopTicker();
+      prog.visible = false;
+      prog.el.style.opacity = '0';
+    }catch(e){}
+  }
+
+  // 错误信息太长会把提示撑爆，截一下
+  function shortErr(err){
+    var s = String((err && err.message) || err || '未知错误');
+    s = s.replace(/^Error:\s*/, '');
+    return s.length > 42 ? s.slice(0, 42) + '…' : s;
+  }
+
+
   function refreshButtons(){
     document.querySelectorAll('.q-voice-btn').forEach(function(btn){
       var key = btn.getAttribute('data-key') || '';
@@ -122,6 +255,7 @@
     releaseAudio();
     voiceState.key = null; voiceState.text = ''; voiceState.source = '';
     voiceState.status = 'idle'; voiceState.utterance = null;
+    progressHide();
     refreshButtons();
   }
   function releaseAudio(){
@@ -183,6 +317,7 @@
       var voice = null;
       try{ voice = getBestChineseVoice(); }catch(e){ voice = null; }
       if(voice) u.voice = voice;
+      u.onstart = function(){ if(token === playToken) progressDone(); };
       u.onend = function(){ resolve('ended'); };
       u.onerror = function(ev){
         var code = (ev && ev.error) || 'unknown';
@@ -238,12 +373,14 @@
     });
   }
 
-  function playObjectUrl(objUrl){
+  function playObjectUrl(objUrl, token){
     return new Promise(function(resolve, reject){
       var audio = new Audio(objUrl);
       audio.preload = 'auto';
       voiceState.audio = audio;
       voiceState.objectUrl = objUrl;
+      // 真正出声的那一刻才把等待进度条收尾（play() 成功 ≠ 已经出声）
+      audio.onplaying = function(){ if(token === undefined || token === playToken) progressDone(); };
       audio.onended = function(){ resolve('ended'); };
       audio.onerror = function(){ reject(new Error('音频解码/播放失败')); };
       var p = audio.play();
@@ -270,11 +407,11 @@
        3) 旧版 AppID + Access Token 正好对应白名单里的 X-Api-App-Key / X-Api-Access-Key —— 老配置照样能用。
 
      响应是 HTTP chunked 的 JSON Lines：{code:0,data:'<base64 mp3>'} … 收尾 {code:20000000}。
-     这里把 base64 片段按顺序拼成 Blob 再交给 playObjectUrl()；任何异常都往上抛，
-     由 speakWithTts() 统一 console.warn + 降级浏览器语音。 */
+     这里把 base64 片段按顺序拼成 Blob，只返回 objectURL（不播），
+     播放交给调用方 —— 流式路径要拿它做「先合成、后按序播」的流水线。
+     异常一律往上抛，由 speakWithTts / startSpeak 提示并停止（不再退回浏览器语音）。 */
   var VOLC_URL = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
   var VOLC_TIMEOUT = 20000;
-  var volcHinted = false;
 
   function volcAuth(){
     var key = String(voiceTtsConfig.volcApiKey || '').trim();
@@ -325,13 +462,10 @@
     return { chunks: chunks, error: errMsg };
   }
 
-  function speakVolc(text, token){
+  // 只负责「合成出音频」，返回 objectURL，不播 —— 便于流式路径边合成边排队播放
+  function fetchVolcAudio(text){
     var auth = volcAuth();
     if(!auth){
-      if(!volcHinted){
-        volcHinted = true;
-        toast('火山引擎还没填 API Key，先用浏览器语音');
-      }
       return Promise.reject(new Error('火山引擎未配置 API Key（或旧版 AppID + Access Token）'));
     }
     if(typeof fetch !== 'function') return Promise.reject(new Error('当前环境不支持 fetch'));
@@ -379,45 +513,41 @@
       for(i = 0; i < parts.length; i++){ merged.set(parts[i], offset); offset += parts[i].length; }
 
       var blob = new Blob([merged], { type: 'audio/mpeg' });
-      var objUrl = URL.createObjectURL(blob);
-      if(token !== playToken){                     // 期间切题 / 被叫停：丢弃，别抢麦
-        try{ URL.revokeObjectURL(objUrl); }catch(e){}
-        return 'canceled';
-      }
-      return playObjectUrl(objUrl);
+      return URL.createObjectURL(blob);
     }).catch(function(err){
       if(timer) clearTimeout(timer);
       throw err;
     });
   }
 
-  // 统一入口：按 provider 分发；第三方任何失败都 console.warn 后降级 browser（不弹窗、不打断）
+  // 统一取音频：edge / volc 返回 objectURL；browser 走 speechSynthesis，没有 URL
+  function fetchTtsAudio(text){
+    var provider = voiceTtsConfig.provider || 'browser';
+    if(provider === 'edge') return fetchEdgeAudio(text);
+    if(provider === 'volc') return fetchVolcAudio(text);
+    return Promise.resolve(null);
+  }
+
+  /* 统一播放入口。
+     [VOICE 2026-10-23e] 需求变更：**第三方引擎失败不再退回浏览器语音** ——
+     那个声音太难听，宁可停住 + 明确提示，让用户去检查配置/网络。
+     仍需「有声音」的场景由用户自己把引擎切回「浏览器自带」。
+     唯一例外：引擎就是 browser 本身（用户明确选的），照旧走 speechSynthesis。 */
   function speakWithTts(text, token){
     var provider = voiceTtsConfig.provider || 'browser';
-    if(provider === 'edge'){
-      return fetchEdgeAudio(text).then(function(objUrl){
-        if(token !== playToken){
-          try{ URL.revokeObjectURL(objUrl); }catch(e){}
-          return 'canceled';
-        }
-        return playObjectUrl(objUrl);
-      }).catch(function(err){
-        console.warn('[VOICE] Edge TTS 失败，已降级浏览器语音：', err && (err.message || err));
-        if(token !== playToken) return 'canceled';
-        releaseAudio();
-        // 需求：第三方失败只 console.warn，不弹窗、不打断
-        return speakBrowser(text, token);
-      });
-    }
-    if(provider === 'volc'){
-      return speakVolc(text, token).catch(function(err){
-        console.warn('[VOICE] 火山引擎 TTS 失败，已降级浏览器语音：', err && (err.message || err));
-        if(token !== playToken) return 'canceled';
-        releaseAudio();
-        return speakBrowser(text, token);
-      });
-    }
-    return speakBrowser(text, token);            // browser：与纯浏览器语音方案完全一致
+    if(provider === 'browser') return speakBrowser(text, token);
+
+    return fetchTtsAudio(text).then(function(objUrl){
+      if(!objUrl) return speakBrowser(text, token);        // 理论不会走到
+      if(token !== playToken){                             // 期间切题 / 被叫停：丢弃，别抢麦
+        try{ URL.revokeObjectURL(objUrl); }catch(e){}
+        return 'canceled';
+      }
+      return playObjectUrl(objUrl, token);
+    }).catch(function(err){
+      console.warn('[VOICE] ' + engineLabel() + ' 合成失败，已停止（不退回浏览器语音）：', err && (err.message || err));
+      throw err;                                           // 交给 startSpeak 提示 + 归位
+    });
   }
 
   function startSpeak(key, text, source){
@@ -428,6 +558,9 @@
     releaseAudio();
     refreshButtons();
     setStatus('playing');
+    if(voiceTtsConfig.provider && voiceTtsConfig.provider !== 'browser'){
+      progressPhase(78, '正在合成语音…');
+    }
     speakWithTts(text, token).then(function(reason){
       if(token !== playToken) return;
       if(reason === 'canceled') return;
@@ -436,7 +569,7 @@
       if(token !== playToken) return;
       console.warn('[VOICE] 播报失败：', err && (err.message || err));
       voiceStop();
-      toast('播报失败：' + ((err && err.message) || '未知错误'));
+      toast(engineLabel() + ' 合成失败：' + shortErr(err) + '（不会再用浏览器语音）');
     });
   }
 
@@ -741,9 +874,74 @@
     });
   }
 
-  /* 流式播报器：一句一个 utterance，speechSynthesis 自己排队；
-     最后一句念完（且流已结束）才归位，中途不会因为队列空一下就把按钮打回 idle。 */
+  /* 引擎播报器（edge / volc 等云端引擎专用）：
+     云端 TTS 是「一次合成一段」，所以这里做成**流水线**：句子一到就并发合成，
+     播完一段立刻接下一段 —— 既保持"第一句到就出声"，又不至于每句之间空等。
+     任何一段失败 → 整体停止并提示，**绝不退回浏览器语音**。 */
+  function makeEngineSpeaker(token){
+    var queue = [], cursor = 0, running = false, closed = false, started = false, dead = false;
+    var urls = [];
+
+    function revokeAll(){
+      urls.forEach(function(u){ try{ URL.revokeObjectURL(u); }catch(e){} });
+      urls = [];
+    }
+    function fail(err){
+      if(dead) return;
+      dead = true;
+      console.warn('[VOICE] ' + engineLabel() + ' 合成失败（不退回浏览器语音）：', err && (err.message || err));
+      if(token !== playToken) return;
+      revokeAll();
+      voiceStop();
+      toast(engineLabel() + ' 合成失败：' + shortErr(err) + '（不会再用浏览器语音）');
+    }
+    function pump(){
+      if(running || dead) return;
+      running = true;
+      (function next(){
+        if(dead || token !== playToken){ running = false; return; }
+        if(cursor >= queue.length){
+          running = false;
+          if(closed){ revokeAll(); voiceStop(); }        // 全部念完 → 归位
+          return;
+        }
+        var item = queue[cursor++];
+        item.url.then(function(objUrl){
+          if(dead || token !== playToken){
+            if(objUrl){ try{ URL.revokeObjectURL(objUrl); }catch(e){} }
+            running = false;
+            return;
+          }
+          urls.push(objUrl);
+          if(!started){ started = true; setStatus('playing'); progressDone(); }
+          return playObjectUrl(objUrl, token);
+        }).then(function(){
+          if(dead) return;
+          next();
+        }).catch(function(err){
+          if(dead) return;
+          fail(err);
+        });
+      })();
+    }
+    return {
+      say: function(chunk){
+        if(!chunk || dead || token !== playToken) return;
+        queue.push({ text: chunk, url: fetchTtsAudio(chunk) });   // 立刻发起合成（预取），播放按顺序
+        pump();
+      },
+      finish: function(){ closed = true; pump(); },
+      isStarted: function(){ return started; }
+    };
+  }
+
+  /* 流式播报器（浏览器语音）：一句一个 utterance，speechSynthesis 自己排队；
+     最后一句念完（且流已结束）才归位，中途不会因为队列空一下就把按钮打回 idle。
+     引擎不是 browser 时改用 makeEngineSpeaker —— 否则"选了火山引擎却听到浏览器声音"。 */
   function makeStreamSpeaker(token){
+    var provider = voiceTtsConfig.provider || 'browser';
+    if(provider !== 'browser') return makeEngineSpeaker(token);
+
     var pending = 0, closed = false, started = false;
     var synth = window.speechSynthesis;
     function done(){ if(token === playToken) voiceStop(); }
@@ -760,6 +958,7 @@
       pending++;
       if(!started){ started = true; setStatus('playing'); }   // 有第一句就切成「播放中」，可暂停
       voiceState.utterance = u;
+      u.onstart = function(){ if(token === playToken) progressDone(); };
       u.onend = function(){ pending--; maybeDone(); };
       u.onerror = function(){ pending--; maybeDone(); };
       try{ synth.speak(u); }catch(e){ pending--; }
@@ -785,15 +984,14 @@
       }, 15000);
     }
     armIdle();
-    var t0 = Date.now();
-    var tipTimer = setTimeout(function(){
-      if(token !== playToken || speaker.isStarted()) return;
-      var sec = Math.round((Date.now() - t0) / 1000);
-      toast('正在写讲解稿…已 ' + sec + ' 秒（同一题第二次点会秒播）');
-    }, 1200);
+    var fedOnce = false;
 
     function feed(piece){
       armIdle();
+      if(!fedOnce){
+        fedOnce = true;
+        progressPhase(70, '正在合成语音…');      // 稿子开始回流 → 进入合成阶段
+      }
       acc += piece;
       buf += piece;
       for(var guard = 0; guard < 40; guard++){
@@ -805,7 +1003,6 @@
     }
 
     return streamScript(item, existing.text, feed, ctrl ? ctrl.signal : undefined).then(function(){
-      clearTimeout(tipTimer);
       clearTimeout(idleTimer);
       if(streamCtrl === ctrl) streamCtrl = null;
       if(token !== playToken) return;
@@ -818,7 +1015,6 @@
       writeCache(key, full, existing.origin);
       speaker.finish();
     }).catch(function(err){
-      clearTimeout(tipTimer);
       clearTimeout(idleTimer);
       if(streamCtrl === ctrl) streamCtrl = null;
       if(token !== playToken) return;
@@ -835,6 +1031,7 @@
     var token = ++playToken;
     voiceState.key = key;
     setStatus('loading');
+    progressShow('正在写讲解稿…');                 // 等待进度条（<300ms 命中缓存时不会露头）
 
     function alive(){ return token === playToken; }
 
@@ -857,6 +1054,7 @@
           return streamExplain(key, item, existing, token).catch(function(err){
             if(!alive()) return null;
             console.warn('[VOICE] 流式改写失败，退回整段请求：', err && (err.message || err));
+            progressPhase(50, '正在写讲解稿…');
             // ③' 流式不可用（服务不支持 SSE / 断流 / 环境无 TextDecoder）→ 退回整段 requestAI
             return rewriteToSpoken(item, existing.text).then(function(script){
               if(!alive()) return null;
@@ -1126,12 +1324,12 @@
     if(hint){
       var extra = '';
       if(p === 'edge' && !String(voiceTtsConfig.edgeUrl || '').trim()){
-        extra = '（未填地址 → 自动用浏览器语音）';
+        extra = '（未填地址 → 无法合成）';
       }else if(p === 'volc' && !volcAuth()){
-        extra = '（未填 API Key → 自动用浏览器语音）';
+        extra = '（未填 API Key → 无法合成）';
       }
       hint.innerHTML = '当前引擎：' + escapeHtml(engineLabel()) + extra
-        + '<br>第三方引擎失败会自动退回浏览器语音，不会中断播放。';
+        + '<br>合成失败会直接停下并提示原因，<b>不会改用浏览器语音</b>。';
     }
   }
   function installVoiceSettingsPanel(){
