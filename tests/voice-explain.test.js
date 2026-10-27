@@ -274,12 +274,13 @@ function addAttemptsAndCopy(win, withCopy = true) {
   return title;
 }
 
-test('按钮顺序：⭐收藏 → 做过N次 → 🎧讲解 → 📋复制', () => {
+test('按钮顺序：⭐收藏 → 来源 → 做过N次 → 🔊讲解 → 📋复制', () => {
   const { win } = makeEnv();
   addAttemptsAndCopy(win, true);
   const qEl = win.document.getElementById('q-f1_q0');
   win.qzVoice._placeVoiceButton(qEl, 'f1_q0');
-  assert.deepEqual(titleOrder(win), ['q-fav', 'q-source', 'new-question-attempts', 'q-voice-btn', 'q-copy-btn']);
+  // [VOICE 2026-10-27] 讲解按钮已从「耳机」换成原来 🔊 朗读按钮那个圆钮，类名同时带两个
+  assert.deepEqual(titleOrder(win), ['q-fav', 'q-source', 'new-question-attempts', 'q-speak-btn q-voice-btn', 'q-copy-btn']);
 });
 
 test('复制按钮尚未追加时先挂末尾，之后再次调用能纠正位置（幂等、不重复插入）', () => {
@@ -288,7 +289,7 @@ test('复制按钮尚未追加时先挂末尾，之后再次调用能纠正位�
   const qEl = win.document.getElementById('q-f1_q0');
   win.qzVoice._placeVoiceButton(qEl, 'f1_q0');
   assert.equal(title.querySelectorAll('.q-voice-btn').length, 1);
-  assert.equal(title.lastElementChild.className, 'q-voice-btn');
+  assert.equal(title.lastElementChild.className, 'q-speak-btn q-voice-btn');
 
   const copy = win.document.createElement('button');
   copy.className = 'q-copy-btn';
@@ -296,10 +297,10 @@ test('复制按钮尚未追加时先挂末尾，之后再次调用能纠正位�
   win.qzVoice._placeVoiceButton(qEl, 'f1_q0');
   win.qzVoice._placeVoiceButton(qEl, 'f1_q0');
   assert.equal(title.querySelectorAll('.q-voice-btn').length, 1);
-  assert.deepEqual(titleOrder(win).slice(-3), ['new-question-attempts', 'q-voice-btn', 'q-copy-btn']);
+  assert.deepEqual(titleOrder(win).slice(-3), ['new-question-attempts', 'q-speak-btn q-voice-btn', 'q-copy-btn']);
   const group = win.document.querySelector('#q-f1_q0 .q-title-actions');
-  assert.ok(group, '🎧 与 📋 应被装进同一个不可断行小组');
-  assert.deepEqual(Array.from(group.children).map((el) => el.className), ['q-voice-btn', 'q-copy-btn']);
+  assert.ok(group, '🔊 与 📋 应被装进同一个不可断行小组');
+  assert.deepEqual(Array.from(group.children).map((el) => el.className), ['q-speak-btn q-voice-btn', 'q-copy-btn']);
   assert.equal(group.parentNode, win.document.querySelector('#q-f1_q0 .q-title'));
 });
 
@@ -312,20 +313,19 @@ test('非白名单分区（申论/综应/面试）不出现该按钮', () => {
   }
 });
 
-test('图标：无 emoji 字符、16×16、三态切换只换 innerHTML', () => {
+test('图标：空闲 🔊 / 播放 ⏸️ / 暂停 ▶️，切换只换 innerHTML', () => {
   const { win } = makeEnv();
   addAttemptsAndCopy(win, true);
   const btn = win.qzVoice._placeVoiceButton(win.document.getElementById('q-f1_q0'), 'f1_q0');
-  assert.match(btn.innerHTML, /<svg width="16" height="16" viewBox="0 0 24 24"/);
-  assert.match(btn.innerHTML, /stroke-width="1.7"/);
-  assert.equal(btn.textContent.trim(), '', '按钮内不应有 emoji / 文字字符');
-  assert.equal(btn.title, '🎧 讲解', 'tooltip 必须是「🎧 讲解」');
-  assert.equal(btn.getAttribute('aria-label'), '🎧 讲解');
-  assert.equal(/语音/.test(btn.title + btn.getAttribute('aria-label')), false, '不含“语音”二字');
+  // [VOICE 2026-10-27] 讲解按钮换成原来 🔊 朗读按钮那颗圆钮：空闲沿用 🔊，播放/暂停才换符号
+  assert.match(btn.innerHTML, /<span class="qz-voice-icon">🔊<\/span>/);
+  assert.equal(btn.textContent.trim(), '🔊');
+  assert.equal(btn.title, '语音讲解', 'tooltip 必须是「语音讲解」');
+  assert.equal(btn.getAttribute('aria-label'), '语音讲解');
   const idle = btn.innerHTML;
   btn.innerHTML = ''; // 模拟状态切换只替换 innerHTML
   btn.innerHTML = idle;
-  assert.equal(btn.textContent.trim(), '');
+  assert.equal(btn.textContent.trim(), '🔊');
 });
 
 test('缓存命中 → 直接播，不调 AI', async () => {
@@ -461,12 +461,12 @@ test('播放 / 暂停 / 继续 + 导航包装函数自动停', async () => {
   btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
   await waitFor(() => calls.speak.length === 1);
   assert.equal(win.qzVoice._state.status, 'playing');
-  assert.match(btn.innerHTML, /M9.4 5.6v12.8/, '播放态应为暂停图标');
+  assert.match(btn.innerHTML, /⏸️/, '播放态应为暂停图标');
 
   btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
   assert.equal(win.qzVoice._state.status, 'paused');
   assert.equal(calls.pause, 1);
-  assert.match(btn.innerHTML, /M8.4 5.6l9.6 6.4/, '暂停态应为播放三角');
+  assert.match(btn.innerHTML, /▶️/, '暂停态应为播放三角');
 
   btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
   assert.equal(win.qzVoice._state.status, 'playing');
@@ -477,7 +477,7 @@ test('播放 / 暂停 / 继续 + 导航包装函数自动停', async () => {
   win.goPage(2);
   assert.equal(win.qzVoice._state.status, 'idle');
   assert.equal(win.qzVoice._state.key, null);
-  assert.match(btn.innerHTML, /M4 14.5v-2.5/, '停止后应回到待播图标');
+  assert.match(btn.innerHTML, /🔊/, '停止后应回到待播图标');
 });
 
 test('语音引擎设置区插入 #aiPanel，含三个选项且默认浏览器自带', () => {
