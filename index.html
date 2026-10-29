@@ -43,7 +43,8 @@
       sy:{main:'#f7c948',mid:'#fae08a',deep:'#8a6d12',bg:'#fef9e0',light:'#fef9e0',onMain:'#2d3748'},
       sl:{main:'#8b5cf6',mid:'#c4b5fd',deep:'#6d28d9',bg:'#f5f3ff',light:'#f5f3ff',onMain:'#ffffff'},
       zy:{main:'#06b6d4',mid:'#7dd3e8',deep:'#0e7490',bg:'#ecfeff',light:'#ecfeff',onMain:'#ffffff'},
-      ms:{main:'#10b981',mid:'#34d399',deep:'#059669',bg:'#ecfdf5',light:'#ecfdf5',onMain:'#ffffff'}
+      ms:{main:'#10b981',mid:'#34d399',deep:'#059669',bg:'#ecfdf5',light:'#ecfdf5',onMain:'#ffffff'},
+      gj:{main:'#6366f1',mid:'#a5b4fc',deep:'#4338ca',bg:'#eef2ff',light:'#eef2ff',onMain:'#ffffff'}
     };
     var skin=localStorage.getItem(SKIN_KEY)||'default';
     var zone=localStorage.getItem(ZONE_KEY)||'gk';
@@ -188,10 +189,6 @@
         
     }
 }
-/* [2026-10-29] 公基入口不做独立胶囊：按用户要求并入筛选栏「状态」下拉，
-   紧跟在「全部状态」下面（见 syncGongjiStatusOption）。这里只留选中态的文字强调。 */
-select#statusFilter option[value="__gongji__"] { color: #0f766e; font-weight: 600; }
-
 @media (min-width: 769px) {
     .filter-bar {
         display: grid !important;
@@ -3340,6 +3337,7 @@ body.skin-dark .en-pagination button.active {
             <option value="gk">国考/省考</option>
             <option value="mk">粉笔模考</option>
             <option value="sy">事业单位</option>
+            <option value="gj">公基</option>
             <option value="sl">申论</option>
             <option value="zy">综应</option>
             <option value="ms">面试</option>
@@ -4246,6 +4244,7 @@ const ZONES = [
   { id:'gk', name:'国考与省考', icon:'🏛️' },
   { id:'mk', name:'模考', icon:'📝' },
   { id:'sy', name:'事业单位', icon:'🏢' },
+  { id:'gj', name:'公基', icon:'📘' },
   { id:'sl', name:'申论', icon:'✍️' },
   { id:'zy', name:'综应', icon:'🖊️' },
   { id:'ms', name:'面试', icon:'🎙️' }
@@ -4257,6 +4256,7 @@ const ZONE_THEMES = {
   gk: { main:'#4a90d9', mid:'#7fb0e8', deep:'#2c6b9e', bg:'#e8f0fe', onMain:'#ffffff' },   // 国省考 蓝
   mk: { main:'#f5a623', mid:'#f8c560', deep:'#b97312', bg:'#fef3e2', onMain:'#2d3748' },   // 模考 橙
   sy: { main:'#f7c948', mid:'#fae08a', deep:'#8a6d12', bg:'#fef9e0', onMain:'#2d3748' },    // 事业单位 黄
+  gj: { main:'#6366f1', mid:'#a5b4fc', deep:'#4338ca', bg:'#eef2ff', onMain:'#ffffff' },    // 公基 靛蓝（此前未用过的颜色）
   sl: { main:'#8b5cf6', mid:'#c4b5fd', deep:'#6d28d9', bg:'#f5f3ff', onMain:'#ffffff' },   // 申论 紫
   zy: { main:'#06b6d4', mid:'#7dd3e8', deep:'#0e7490', bg:'#ecfeff', onMain:'#ffffff' },   // 综应 青
   ms: { main:'#10b981', mid:'#34d399', deep:'#059669', bg:'#ecfdf5', onMain:'#ffffff' }     // 面试 绿
@@ -4286,9 +4286,9 @@ function applyZoneTheme(z){
   r.setProperty('--grad-b', t.deep);
 }
 
-const ZONE_IDS = ['gk','mk','sy','sl','zy','ms'];
-let index = { gk:[], mk:[], sy:[], sl:[], zy:[], ms:[] };   // 轻量元数据：{id,fileName,zone,module,uploadTime,size,count}
-let db = { gk:{}, mk:{}, sy:{}, sl:{}, zy:{}, ms:{} };      // 完整数据：id -> {fileName,zone,module,uploadTime,size,questions,answered}
+const ZONE_IDS = ['gk','mk','sy','gj','sl','zy','ms'];
+let index = { gk:[], mk:[], sy:[], gj:[], sl:[], zy:[], ms:[] };   // 轻量元数据：{id,fileName,zone,module,uploadTime,size,count}
+let db = { gk:{}, mk:{}, sy:{}, gj:{}, sl:{}, zy:{}, ms:{} };      // 完整数据：id -> {fileName,zone,module,uploadTime,size,questions,answered}
 let activeZone = 'gk';
 let activeFile = '__all__';   // '__all__' 表示显示本分区全部文件合并
 let currentPage = 1;
@@ -4358,7 +4358,7 @@ function syncSortFilterValue(){
 // ============================================================
 let autoShowSolution = true;                    // 作答后是否自动展开解析
 const AUTO_SOLUTION_KEY = 'qz_auto_solution';   // localStorage 持久化键
-const AUTO_SOLUTION_ZONES = ['gk','mk','sy'];   // 分区白名单（新增分区时在此追加）
+const AUTO_SOLUTION_ZONES = ['gk','mk','sy','gj'];   // 分区白名单（新增分区时在此追加）
 const AUTO_SOLUTION_MOBILE_MAX = 768;           // 与 CSS 断点保持一致：≤768 用短文案
 
 function isAutoSolutionZone(zone){
@@ -4438,8 +4438,8 @@ loadAutoSolutionSetting();
 window.addEventListener('resize', function(){ updateAutoSolutionBtnState(); });
 
 // 错题集 / 收藏 / 每日任务 / 考试日期（均持久化到 IndexedDB）
-let wrongSet = { gk:{}, mk:{}, sy:{}, sl:{}, zy:{}, ms:{} };
-let favorites = { gk:{}, mk:{}, sy:{}, sl:{}, zy:{}, ms:{} };
+let wrongSet = { gk:{}, mk:{}, sy:{}, gj:{}, sl:{}, zy:{}, ms:{} };
+let favorites = { gk:{}, mk:{}, sy:{}, gj:{}, sl:{}, zy:{}, ms:{} };
 let daily = { date:'', count:0, goal:50 };
 let examDate = '';
 
@@ -4455,7 +4455,7 @@ let examDate = '';
 // }
 // 注意：reviewState 与 wrongSet 完全独立，mastered 不会删除 wrongSet。
 // ============================================================
-const REVIEW_ZONES = ['gk','mk','sy'];
+const REVIEW_ZONES = ['gk','mk','sy','gj'];
 const REVIEW_INTERVALS = [1, 3, 7, 14, 30];   // 天：第1/2/3/4/5次复盘后的间隔
 const REVIEW_MASTER_STREAK = 3;               // 连续 3 次复盘正确 → mastered
 const REVIEW_MASTER_INTERVALS = [60, 90, 120]; // 天：mastered 后长期抽查间隔（60→90→120，之后保持120）
@@ -4936,7 +4936,7 @@ function saveFile(z,id){
 const ANS_STATE_PREFIX = 'state:';
 function ansStateKey(zone, fileId){ return ANS_STATE_PREFIX + zone + ':' + fileId; }
 // zone -> fileId -> 'state'（内存态已由 state 水合 / 已迁移）| 'file'（尚未迁移，内存态来自 file.answered）
-let _ansStateSrc = { gk:{}, mk:{}, sy:{}, sl:{}, zy:{}, ms:{} };
+let _ansStateSrc = { gk:{}, mk:{}, sy:{}, gj:{}, sl:{}, zy:{}, ms:{} };
 let _ansStateErr = [];                 // 迁移回读校验失败记录（只报告，绝不自动覆盖）
 function ansStateTypeTag(v){ return Array.isArray(v) ? 'array' : (v===null ? 'null' : typeof v); }
 // 严格相等：类型不同即不等（array vs string 必须被识别为不一致）
@@ -5793,7 +5793,7 @@ var BODY_SHELL_MARK = '_bodyReleased';
 var BODY_SHELL_FIELDS = ['id', 'fileName', 'module', 'uploadTime', 'size'];
 
 // in-flight 去重表：zone -> fileId -> Promise。并发 load 同一文件只会真读一次 IDB。
-var _bodyInflight = { gk:{}, mk:{}, sy:{}, sl:{}, zy:{}, ms:{} };
+var _bodyInflight = { gk:{}, mk:{}, sy:{}, gj:{}, sl:{}, zy:{}, ms:{} };
 // 关于「load 在飞时被 release」的竞态：这里**刻意不需要**世代号，理由是一条不变式：
 //   ① 存在 in-flight(z,id) ⟹ db[z][id] 此刻不是完整正文（load 入口会短路已加载的情况）；
 //   ② releaseQuestionFile 只在 db[z][id] 是完整正文时才动手，否则返回 false；
@@ -6451,6 +6451,10 @@ function detectZone(name){
   //   而 `事业单位模拟题` 因为「事业单位」排在「模拟」之后才进 mk ——
   //   同一个「模拟题」落点却由正则顺序决定，不合理。
   //   现在规则统一为：**模拟卷一律进模考(mk)；真题仍按科目进各自分区**。
+  // 公基（sydw）/ 三支一扶公基（szyf）：必须在「模拟」之前判定，
+  //   否则「公基_公基模拟题_3319题.json」会被 /模拟/ 抢去模考分区。
+  //   三支一扶职测（szyfzc）不属于公基，沿用下方 /职测/ → sy。
+  if(/公基|三支一扶|sydw|szyf/.test(n) && !/职测|szyfzc/.test(n)) return 'gj';
   if(/模考|模拟/.test(n)) return 'mk';
   if(/国考|省考|行测|xingce/.test(n)) return 'gk';
   if(/事业单位|职测|syzc/.test(n)) return 'sy';
@@ -6703,7 +6707,7 @@ function normalizeSearchText(value){
 // ============================================================
 
 // 行测类分区（搜索范围受限）
-var RESTRICTED_SEARCH_ZONES = { gk:1, mk:1, sy:1 };
+var RESTRICTED_SEARCH_ZONES = { gk:1, mk:1, sy:1, gj:1 };
 
 // 行测类「允许搜索」的顶层字段（题干 / 选项 / 年份 / 地区 / 来源）
 var RESTRICTED_SEARCH_FIELD_WHITELIST = {
@@ -7522,7 +7526,7 @@ function getQuestionCorrectRatio(q){
 //      （_answered 属于做题进度、必然变化，每次取快照时按 file.answered 刷新。）
 // ============================================================
 var _dbEpoch = 0;                          // 题库内容版本号：导入/删除/清空后 +1
-var _prepFiles = { gk:{}, mk:{}, sy:{}, sl:{}, zy:{}, ms:{} };   // zone -> fileId -> 展开副本数组
+var _prepFiles = { gk:{}, mk:{}, sy:{}, gj:{}, sl:{}, zy:{}, ms:{} };   // zone -> fileId -> 展开副本数组
 var _snap = { zone:null, epoch:-1, arr:null, fileCount:-1 };                   // 分区级快照
 function countFileEntries(obj){ var n=0; for(var k in obj) n++; return n; }
 function dropSnapshot(){ _snap.zone = null; _snap.epoch = -1; _snap.arr = null; _snap.fileCount = -1; }
@@ -7734,13 +7738,6 @@ function prepareQuestion(zone, f, q, qi){
   p._qi = qi;
   p._key = key;
   p._zone = zone;
-  // [2026-10-29] 跨卷标签（_tags）必须跟着视图记录走。
-  //   视图记录只收**标量**（数组/对象被上面那圈过滤掉），而 _tags 是数组
-  //   ⇒ 直接放会整条丢失，来源框输入「公基」筛出 0 题（实测 64210 题只剩 20 条带标签）。
-  //   这里压成 "|公基|" 形式的字符串携带；卸载正文（viewRecordDetach）只删对象字段，字符串留得住。
-  if(Array.isArray(q._tags) && q._tags.length){
-    p._tagText = '|' + q._tags.join('|') + '|';
-  }
   // [20261020] 含评论标记：分类模块已把「考生讨论」并进 solution，标量 hasComment / cmtTotal
   //   能进视图记录，所以优先读它们。
   // [CMT 2026-10-22] 兜底（补齐 20261020 的缺口）：iCloud「题库 有评论」整批只把「考生讨论」
@@ -8093,7 +8090,7 @@ function preparedFile(zone, f){
 // 刷新展开副本上的做题进度（_answered 会做题而变，其余派生值不变）
 // 用「作答版本号」做闸门：只有真正写过进度之后才扫一遍，避免每次取快照都空跑整个分区。
 var _ansStamp = 0;
-var _ansStampByZone = { gk:-1, mk:-1, sy:-1, sl:-1, zy:-1, ms:-1 };
+var _ansStampByZone = { gk:-1, mk:-1, sy:-1, gj:-1, sl:-1, zy:-1, ms:-1 };
 function markAnswersDirty(){ _ansStamp = (_ansStamp || 0) + 1; }
 function refreshAnsweredCache(zone, arr){
   if(_ansStampByZone[zone] === _ansStamp) return;
@@ -8443,33 +8440,10 @@ function getFilterBaseQuestions(){
   // 来源（改为包含匹配，所有分区生效）
   if(filterState.source && filterState.source!=='all'){
     var sourceValue = filterState.source;
-    qs=qs.filter(function(q){ return srcOrTagMatch(q, sourceValue); });
+    qs=qs.filter(function(q){ return (q.source || '').includes(sourceValue); });
   }
   _gfbMemo.sig = sig; _gfbMemo.arr = qs;
   return qs.slice();
-}
-
-// [2026-10-29] 公基题数：直接用分区视图记录数，**不依赖** window._sourceCount。
-//   踩过的坑：_sourceCount 由 updateFilterOptions 计算，而 renderModuleBar 可能先跑
-//   （首次渲染只算到 10900，刷新后干脆是 0），导致按钮题数错或按钮根本不出现。
-var _gjCountCache = { key: '', n: 0 };
-function gongjiTagCount(){
-  if(activeZone !== 'sy') return 0;
-  var arr = getZoneQuestions('sy', '__all__') || [];
-  var key = _dbEpoch + '|' + arr.length;
-  if(_gjCountCache.key === key) return _gjCountCache.n;
-  var n = 0;
-  for(var i = 0; i < arr.length; i++){
-    var q = arr[i];
-    if(!q) continue;
-    var t = q._tagText;
-    if(t && t.indexOf('公基') !== -1){ n++; continue; }
-    var tags = q._tags;
-    if(Array.isArray(tags) && tags.indexOf('公基') !== -1) n++;
-  }
-  _gjCountCache.key = key;
-  _gjCountCache.n = n;
-  return n;
 }
 
 function renderModuleBar(){
@@ -8530,17 +8504,24 @@ function renderModuleBar(){
       counts[m]++;
     });
     var html = '<button class="module-btn ' + (filterState.module === 'all' ? 'active' : '') + '" data-module="all">📂 全部<span class="count">' + counts.all + ' 题</span></button>';
-    // [2026-10-29] 公基视图入口：常驻在「📂 全部」右侧，一眼可见。
-    //   此前只放进「状态」下拉里，不展开下拉就完全看不到，用户反馈「根本没有看到」。
-    var _gjTotal = gongjiTagCount();
-    if(activeZone === 'sy' && _gjTotal > 0){
-      html += '<button class="module-btn gongji-enter-btn' + (filterState.source === '公基' ? ' active' : '') + '" data-module="__gongji__" title="只看带「公基」跨卷标签的题；再点一次取消">🏷 公基<span class="count">' + _gjTotal + ' 题</span></button>';
+    // [公基 20261029] 公基的模块是「法律/政治/公文/时政…」这类学科大类，
+    //   行测六模块（MODS）的固定顺序对它没有意义（会把 43 题的「数量关系」排到 3127 题的「法律」前面），
+    //   所以公基分区直接按题数降序，「未分类」永远垫底。其余分区保持原有顺序不变。
+    var orderedModules;
+    if (activeZone === 'gj') {
+      orderedModules = Object.keys(counts).filter(function(m) { return m !== 'all' && counts[m] > 0; })
+        .sort(function(a, b) {
+          if (a === '未分类') return 1;
+          if (b === '未分类') return -1;
+          return counts[b] - counts[a];
+        });
+    } else {
+      // 已知模块按固定顺序优先展示，其余（含“未分类”）按题数从多到少追加
+      orderedModules = MODS.filter(function(m) { return counts[m] && counts[m] > 0; });
+      Object.keys(counts).sort(function(a, b) { return counts[b] - counts[a]; }).forEach(function(m) {
+        if (m !== 'all' && orderedModules.indexOf(m) === -1) orderedModules.push(m);
+      });
     }
-    // 已知模块按固定顺序优先展示，其余（含“未分类”）按题数从多到少追加
-    var orderedModules = MODS.filter(function(m) { return counts[m] && counts[m] > 0; });
-    Object.keys(counts).sort(function(a, b) { return counts[b] - counts[a]; }).forEach(function(m) {
-      if (m !== 'all' && orderedModules.indexOf(m) === -1) orderedModules.push(m);
-    });
     orderedModules.forEach(function(m) {
       if (counts[m] && counts[m] > 0) {
         html += '<button class="module-btn ' + (filterState.module === m ? 'active' : '') + '" data-module="' + m + '">' + m + '<span class="count">' + counts[m] + ' 题</span></button>';
@@ -8551,13 +8532,8 @@ function renderModuleBar(){
 
   moduleBar.querySelectorAll('.module-btn').forEach(function(b) {
     b.onclick = function() {
-      // [2026-10-29] 公基不是模块，是跨卷标签构成的视图：切换它不动 module
-      if(this.dataset.module === '__gongji__'){ setGongjiView(filterState.source !== '公基'); return; }
-      var _gjBtn = moduleBar.querySelector('.gongji-enter-btn');
       moduleBar.querySelectorAll('.module-btn').forEach(function(x) { x.classList.remove('active'); });
       this.classList.add('active');
-      // 公基视图下再点模块 = 叠加筛选，公基按钮要保持高亮
-      if(_gjBtn && filterState.source === '公基') _gjBtn.classList.add('active');
       filterState.module = this.dataset.module;
       filterState.subType = 'all';
       filterState.leafType = 'all';
@@ -8648,7 +8624,7 @@ function updateFilterOptions() {
       '<option value="note">📝 只显示心得</option>' +
       '<option value="commented">💬 只显示有评论</option>';
   }
-  if(activeZone==='sl' || activeZone==='zy' || activeZone==='ms'){ syncGongjiStatusOption(0); return; }
+  if(activeZone==='sl' || activeZone==='zy' || activeZone==='ms') return;
   yearFilter.style.display='';
   provinceFilter.style.display='';
   sourceFilter.style.display='';
@@ -8696,20 +8672,6 @@ function updateFilterOptions() {
         years.add(yearToken);
         yearCount[yearToken] = (yearCount[yearToken] || 0) + 1;
     });
-
-    // [2026-10-29] 「公基」是跨卷标签，不是一个真实来源名。
-    //   来源框是 datalist：change 只接受 window.sourceValues 里的**精确值**，
-    //   直接在框里打字会被判成「不存在的来源」→ 重置为全部来源（实测筛出 0 题）。
-    //   所以把标签当成一个伪来源塞进候选表，让「点选」这条正常路径能选中它；
-    //   真正的匹配交给 srcOrTagMatch（source ∪ _tagText）。
-    var __tagCount = 0;
-    getZoneQuestions(activeZone, '__all__').forEach(function(q) {
-        var tt = q && q._tagText;
-        if(typeof tt === 'string' && tt.indexOf('|公基|') !== -1) __tagCount++;
-    });
-    if(__tagCount > 0){
-        sourceCount['公基'] = (sourceCount['公基'] || 0) + __tagCount;
-    }
 
     if (activeZone === 'mk' && years.size < 2) {
         var files = db.mk || {};
@@ -8778,69 +8740,10 @@ function updateFilterOptions() {
         });
     }
 
-    // [2026-10-29] 「公基」伪来源排到最前（它没有年份，按年份排会沉到末尾，不好找）
-    if(sourceCount['公基']){
-        uniqueSources = ['公基'].concat(uniqueSources.filter(function(s){ return s !== '公基'; }));
-    }
-
     window.sourceValues = uniqueSources;
     window._sourceCount = sourceCount;
 
     renderSourceSuggestions();
-    syncGongjiStatusOption(sourceCount['公基'] || 0);
-}
-
-// [2026-10-29] 公基入口：并进筛选栏的「状态」下拉，紧跟「全部状态」这一项。
-//   跨卷标签不是真实来源，放进状态下拉当「专题视图」用：选中它 = 状态回「全部」+ 来源置「公基」。
-//   与「来源」框里那条伪来源是同一个筛选条件，两处互相同步。
-var GONGJI_STATUS_VALUE = '__gongji__';
-
-function syncGongjiStatusOption(count){
-  if(!statusFilter) return;
-  // 以实际题数为准（count 参数仅作兼容保留）：_sourceCount 可能算得比本函数晚或是半成品
-  var n = gongjiTagCount();
-  var opt = null;
-  for(var i = 0; i < statusFilter.options.length; i++){
-    if(statusFilter.options[i].value === GONGJI_STATUS_VALUE){ opt = statusFilter.options[i]; break; }
-  }
-  var show = (activeZone === 'sy') && n > 0;
-  if(!show){
-    if(opt) opt.parentNode.removeChild(opt);
-    if(statusFilter.value === GONGJI_STATUS_VALUE) statusFilter.value = filterState.status || 'all';
-    return;
-  }
-  if(!opt){
-    opt = document.createElement('option');
-    opt.value = GONGJI_STATUS_VALUE;
-    opt.title = '跨卷标签：只看带「公基」标签的题（可与模块/题型/细分叠加）';
-    // 紧随「全部状态」之后，让入口在第一屏第一格就看得见
-    var first = statusFilter.querySelector('option[value="all"]');
-    if(first && first.nextSibling) statusFilter.insertBefore(opt, first.nextSibling);
-    else statusFilter.appendChild(opt);
-  }
-  opt.textContent = '🏷 公基（跨卷标签，' + n + ' 题）';
-  if(filterState.source === '公基') statusFilter.value = GONGJI_STATUS_VALUE;
-  else if(statusFilter.value === GONGJI_STATUS_VALUE) statusFilter.value = filterState.status || 'all';
-}
-
-// 打开/关闭「公基视图」：状态与标签互斥，避免状态下拉显示与实际筛选不一致
-function setGongjiView(on){
-  filterState.source = on ? '公基' : 'all';
-  filterState.status = 'all';
-  // 视图级切换：一并清掉模块/题型/细分，保证点一下就看到全部公基题（之后仍可再叠加）
-  filterState.module = 'all';
-  filterState.subType = 'all';
-  filterState.leafType = 'all';
-  if(sourceFilter) sourceFilter.value = on ? '公基' : '';
-  if(moduleFilter) moduleFilter.value = 'all';
-  if(statusFilter) statusFilter.value = on ? GONGJI_STATUS_VALUE : 'all';
-  currentPage = 1;
-  saveView();
-  renderModuleBar();
-  if(typeof window.updateSubTypeFilter === 'function') window.updateSubTypeFilter();
-  refreshFilterCounters();
-  renderQuestions();
-  syncGongjiStatusOption();
 }
 
 // 刷新 #sortFilter 的区间选项文字（追加各区间题数），并保持/修复当前选中值
@@ -8901,7 +8804,7 @@ function countRatioRanges(qs){
 // 未叠加任何其它筛选时，结果等于整个分区的正确率分布。
 function refreshRatioRangeOptions(){
   if(!sortFilter) return;
-  if(activeZone!=='gk' && activeZone!=='mk' && activeZone!=='sy') return;   // 仅这三个分区显示该下拉框
+  if(activeZone!=='gk' && activeZone!=='mk' && activeZone!=='sy' && activeZone!=='gj') return;   // 仅客观题分区显示该下拉框
   var savedRange = filterState.ratioRange;
   filterState.ratioRange = 'all';        // 只排除「正确率区间」这一维，其余筛选全部保留
   var base = getFiltered(true);          // true = 只统计集合，跳过无用的排序
@@ -8922,16 +8825,13 @@ function renderSourceSuggestions(query) {
     var keyword = String(query || '').trim().toLowerCase();
 
     // 过滤匹配的来源
-    // [2026-10-29] 「公基」由上面的固定项单独渲染，这里排除掉，避免下拉里出现两条一模一样的
-    var _hasGongji = !!(window._sourceCount && window._sourceCount['公基']);
     var allMatches = (window.sourceValues || []).filter(function(source) {
-        if(_hasGongji && source === '公基') return false;
         var provinceMatch = sourceMatchesProvince(source, sourceProvince);
         var keywordMatch = !keyword || source.toLowerCase().includes(keyword);
         return provinceMatch && keywordMatch;
     });
 
-    var totalSources = allMatches.length + (_hasGongji ? 1 : 0);
+    var totalSources = allMatches.length;
     var pageSize = 50;
     var totalPages = Math.max(1, Math.ceil(totalSources / pageSize));
     
@@ -8956,11 +8856,6 @@ function renderSourceSuggestions(query) {
         html += '<option disabled style="color:#2563eb;font-weight:bold;">🔍 搜索: "' + keyword + '" 找到 ' + totalSources + ' 个结果</option>';
     } else {
         html += '<option disabled style="color:#2563eb;font-weight:bold;">📚 共 ' + totalSources + ' 个来源，第 ' + (currentPage + 1) + '/' + totalPages + ' 页</option>';
-    }
-
-    // [2026-10-29] 跨卷标签入口：来源框选中「公基」即可筛出 _tags 含「公基」的题
-    if(_hasGongji && (!keyword || '公基'.indexOf(keyword) !== -1 || keyword.indexOf('公基') !== -1)){
-        html += '<option value="公基" style="color:#0f766e;font-weight:bold;">🏷 公基（跨卷标签，' + window._sourceCount['公基'] + '题）</option>';
     }
 
     // 选项列表
@@ -8992,12 +8887,6 @@ function applyFilterStateToUI(){
   if(provinceFilter) setSelectValue(provinceFilter, filterState.province);
   if(sourceFilter) sourceFilter.value=filterState.source==='all'?'':filterState.source;
   setSelectValue(statusFilter, filterState.status);
-  // [2026-10-29] 公基视图：来源是「公基」时，状态下拉显示「🏷 公基」那一项
-  if(statusFilter && filterState.source === '公基'){
-    for(var _gi = 0; _gi < statusFilter.options.length; _gi++){
-      if(statusFilter.options[_gi].value === GONGJI_STATUS_VALUE){ statusFilter.value = GONGJI_STATUS_VALUE; break; }
-    }
-  }
   // [FIX 20260930 v2] 合并下拉：优先显示 ratioRange（如果设了区间），否则显示 sortBy
   if(sortFilter){
     if(filterState.ratioRange && filterState.ratioRange !== 'all'){
@@ -9010,8 +8899,7 @@ function applyFilterStateToUI(){
   if(minRatioInput) minRatioInput.value=filterState.minRatio;
   if(maxRatioInput) maxRatioInput.value=filterState.maxRatio;
   if(yearFilter) filterState.year=yearFilter.value; if(provinceFilter) filterState.province=provinceFilter.value; if(sourceFilter) filterState.source=sourceFilter.value;
-  // 「🏷 公基」是视图入口不是合法状态值，别把 __gongji__ 写进 filterState.status
-  if(statusFilter && statusFilter.value !== GONGJI_STATUS_VALUE) filterState.status=statusFilter.value;
+  if(statusFilter) filterState.status=statusFilter.value;
   // [FIX 20260930] 只在 sortFilter.value 是合法排序值时回写 sortBy，
   // 防止某些边缘场景把区间值写进 sortBy，导致排序失效。
   // [FIX 20260930 v2] 反写分流：sortFilter 值是 range* → 写 ratioRange；是排序值 → 写 sortBy
@@ -9214,32 +9102,6 @@ function getSpecialQuestionType(question){
   return '未分类';
 }
 // skipSort=true 时只做筛选不做排序（供「统计题数」这类只关心集合、不关心顺序的场景使用）
-// ============================================================
-// [2026-10-29] 来源框兼做「跨卷标签」匹配
-// ------------------------------------------------------------
-// 背景：公基专题的题并入事业单位总库后，逐题打了 _tags:["公基"]；
-//   为不动已调好的筛选栏九宫格布局，不新增筛选控件，
-//   而是让「来源」输入框同时匹配 source 与 _tags。
-// 规则：输入「公基」→ 命中 source 含该词的题 + _tags 含该词的题；
-//   其余关键词行为不变（仅多了 tags 这一路），原有来源筛选不受影响。
-// ============================================================
-function srcOrTagMatch(q, keyword){
-  var kw = String(keyword || '');
-  if(!kw) return true;
-  if(String((q && q.source) || '').indexOf(kw) !== -1) return true;
-  var tags = q && q._tags;                       // 原始题对象（正文已挂载时才有）
-  if(Array.isArray(tags)){
-    for(var i = 0; i < tags.length; i++){
-      if(String(tags[i] || '').indexOf(kw) !== -1) return true;
-    }
-  }
-  // [2026-10-29] 视图记录上的标签是压平的标量串 "|公基|"（见 prepareQuestion）。
-  //   筛选走的是视图记录，**这一路才是实际生效的那条**。
-  var tt = q && q._tagText;
-  if(typeof tt === 'string' && tt !== '' && tt.indexOf(kw) !== -1) return true;
-  return false;
-}
-
 function getFiltered(skipSort){
   let qs=getZoneQuestions(activeZone, '__all__');
   const kw=normalizeSearchText(filterState.search);
@@ -9311,7 +9173,7 @@ function getFiltered(skipSort){
   // 来源（改为包含匹配，所有分区生效）
   if(filterState.source && filterState.source!=='all'){
     var sourceValue = filterState.source;
-    qs=qs.filter(function(q){ return srcOrTagMatch(q, sourceValue); });
+    qs=qs.filter(function(q){ return (q.source || '').includes(sourceValue); });
   }
 
   // 做题状态
@@ -10223,14 +10085,7 @@ window.fullDiagnosticScan = function() {
 
     // ----- 1.6 检查筛选状态 -----
     if (filterState.source && filterState.source !== 'all') {
-        var _sv = filterState.source;
-        var sourceExists = (window.sourceValues || []).some(function(s) { return s === _sv || s.indexOf(_sv) !== -1; });
-        // [2026-10-29] 兼容 _tags 跨卷标签（如「公基」）：标签命中也算「存在」
-        if (!sourceExists) {
-            try {
-                sourceExists = getZoneQuestions(activeZone, '__all__').some(function(q) { return srcOrTagMatch(q, _sv); });
-            } catch (e) { sourceExists = true; }
-        }
+        var sourceExists = (window.sourceValues || []).some(function(s) { return s === filterState.source; });
         if (!sourceExists) {
             issues.push({ level: 'warning', type: '筛选', message: '当前选中的来源 "' + filterState.source + '" 不存在', fix: '点击"清除筛选"重置' });
         }
@@ -11792,13 +11647,6 @@ function switchZone(z){
   if(restoredStudyPosition){
     currentPage=Math.max(1, Number(restoredStudyPosition.page)||1);
   }
-  // [2026-10-29] 重置 renderAll 的「视图未就绪」重入标记。
-  //   该标记按 (zone + dbEpoch) 去重，而**同一分区反复进出时 dbEpoch 不变** ⇒
-  //   第二次进入这个分区时，闸门误以为已经重试过、直接拿空记录渲染：
-  //   题目列表靠后续 renderQuestions 补上了，但 updateFilterOptions 不会再跑，
-  //   结果「来源」下拉变成空表（实测：切走再切回，sourceValues 从 189 条变 0 条，
-  //   连「公基」在内的所有来源都选不出来）。切换时清空标记即可正常重建。
-  _renderAllViewRetry = null;
   saveView(); renderAll();
   // C2-B：cleanInvalidWrongSilent 的白名单依赖「本分区题目 Key 全集」（zoneDataComplete 已加守卫）。
   //   视图未就绪时它会直接跳过清理 ⇒ 这里等视图就绪后再执行，保持与旧实现相同的行为时序语义。
@@ -13503,7 +13351,7 @@ async function importBackupFromObject(data){
   if(data._type==='helium_quiz_backup' && data.index){
     alert('检测到旧版备份格式，正在导入...');
     fromLabel='备份对象';
-    const zoneMap={'gk':'gk','mk':'mk','sy':'sy','sl':'sl','zy':'zy','ms':'ms','国考省考':'gk','国考/省考':'gk','粉笔模考':'mk','事业单位':'sy','申论':'sl','综应':'zy','面试':'ms'};
+    const zoneMap={'gk':'gk','mk':'mk','sy':'sy','sl':'sl','zy':'zy','ms':'ms','国考省考':'gk','国考/省考':'gk','粉笔模考':'mk','事业单位':'sy','公基':'gj','申论':'sl','综应':'zy','面试':'ms'};
     Object.keys(data.index).forEach(zoneKey=>{
       const zone=zoneMap[zoneKey]||zoneKey;
       if(!newIndex[zone]){ newIndex[zone]=[]; newDb[zone]={}; }
@@ -13535,7 +13383,7 @@ async function importBackupFromObject(data){
   // —— 电脑版数组格式 ——
   else if(Array.isArray(data)){
     fromLabel='数组格式';
-    const zoneMap={'国考省考':'gk','国考/省考':'gk','粉笔模考':'mk','事业单位':'sy','申论':'sl','综应':'zy','面试':'ms'};
+    const zoneMap={'国考省考':'gk','国考/省考':'gk','粉笔模考':'mk','事业单位':'sy','公基':'gj','申论':'sl','综应':'zy','面试':'ms'};
     data.forEach(item=>{
       if(!item) return;
       const zone=zoneMap[item.partition]||'gk';
@@ -14140,19 +13988,6 @@ sourceFilter.addEventListener('input', function(e) {
 sourceFilter.addEventListener('keydown', function(e) {
     // ====== 回车键跳转到指定页 ======
     if (e.key === 'Enter') {
-        // [2026-10-29] 回车先当成「确认当前来源」：输入/选中「公基」等候选值后
-        //   直接按回车即可生效，不必再点别处触发 change（否则会被当成页码输入吞掉）。
-        var _typed = this.value.trim();
-        if(_typed && window.sourceValues && window.sourceValues.indexOf(_typed) !== -1){
-            filterState.source = _typed;
-            currentPage = 1;
-            saveView();
-            refreshFilterCounters();
-            renderQuestions();
-            syncGongjiStatusOption();
-            this.blur();
-            return;
-        }
         var val = parseInt(this.value.trim());
         var totalPages = 1;
         // 计算总页数
@@ -14182,7 +14017,6 @@ sourceFilter.addEventListener('keydown', function(e) {
         renderSourceSuggestions('');
         refreshFilterCounters();
         renderQuestions();
-        syncGongjiStatusOption();
         this.blur();
     }
 });
@@ -14198,19 +14032,8 @@ sourceFilter.addEventListener('change', function() {
   saveView();
   refreshFilterCounters();
   renderQuestions();
-  syncGongjiStatusOption();
 });
-statusFilter.addEventListener('change', ()=>{
-  // [2026-10-29] 下拉里的「🏷 公基」是专题视图，不是真实做题状态
-  if(statusFilter.value === GONGJI_STATUS_VALUE){ setGongjiView(true); return; }
-  // 选了具体做题状态 → 退出公基视图（两者共用一个下拉，互斥以免显示与实际不一致）
-  if(filterState.source === '公基'){
-    filterState.source = 'all';
-    if(sourceFilter) sourceFilter.value = '';
-  }
-  filterState.status=statusFilter.value; currentPage=1; saveView(); refreshFilterCounters(); renderQuestions();
-  syncGongjiStatusOption();
-});
+statusFilter.addEventListener('change', ()=>{ filterState.status=statusFilter.value; currentPage=1; saveView(); refreshFilterCounters(); renderQuestions(); });
 sortFilter.addEventListener('change', ()=>{
   // [FIX 20260930 v2] 合并下拉：一个框，既能选排序，也能选区间
   var v = sortFilter.value;
@@ -16662,7 +16485,7 @@ if (window.renderQuestions) window.renderQuestions();
   // 取文本：优先数据层（content / getOptions / getCorrectLetter / solution），
   //         正文按需释放（C2-B 轻量壳）时退回页面已渲染的 DOM，两条路都能拿到内容。
   // ============================================================
-  const COPY_ZONES={ gk:1, mk:1, sy:1 };
+  const COPY_ZONES={ gk:1, mk:1, sy:1, gj:1 };
   const ICON_CLIP='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="4" rx="1.2"/><path d="M15 5h2.2A1.8 1.8 0 0 1 19 6.8v13.4A1.8 1.8 0 0 1 17.2 22H6.8A1.8 1.8 0 0 1 5 20.2V6.8A1.8 1.8 0 0 1 6.8 5H9"/><path d="M8.6 12.4h6.8M8.6 16.2h4.4"/></svg>';
   const ICON_OK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8l4.6 4.4L19 7"/></svg>';
   const ICON_BAD='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
@@ -22857,7 +22680,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
   window.__qzVoiceExplainInstalled = true;
 
   /* ---------- 0. 常量 ---------- */
-  var ZONES = { gk:1, mk:1, sy:1 };            // 与 REVIEW_ZONES 白名单一致：申论/综应/面试不出现
+  var ZONES = { gk:1, mk:1, sy:1, gj:1 };      // 与 REVIEW_ZONES 白名单一致：申论/综应/面试不出现
   var CFG_KEY = 'qz_voice_tts_config';
   var CACHE_PREFIX = 'en_voice_explain_';
   var CACHE_DB = 'qz_voice_cache_db';
