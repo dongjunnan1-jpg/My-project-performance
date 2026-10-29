@@ -188,6 +188,10 @@
         
     }
 }
+/* [2026-10-29] 公基入口不做独立胶囊：按用户要求并入筛选栏「状态」下拉，
+   紧跟在「全部状态」下面（见 syncGongjiStatusOption）。这里只留选中态的文字强调。 */
+select#statusFilter option[value="__gongji__"] { color: #0f766e; font-weight: 600; }
+
 @media (min-width: 769px) {
     .filter-bar {
         display: grid !important;
@@ -7730,6 +7734,13 @@ function prepareQuestion(zone, f, q, qi){
   p._qi = qi;
   p._key = key;
   p._zone = zone;
+  // [2026-10-29] 跨卷标签（_tags）必须跟着视图记录走。
+  //   视图记录只收**标量**（数组/对象被上面那圈过滤掉），而 _tags 是数组
+  //   ⇒ 直接放会整条丢失，来源框输入「公基」筛出 0 题（实测 64210 题只剩 20 条带标签）。
+  //   这里压成 "|公基|" 形式的字符串携带；卸载正文（viewRecordDetach）只删对象字段，字符串留得住。
+  if(Array.isArray(q._tags) && q._tags.length){
+    p._tagText = '|' + q._tags.join('|') + '|';
+  }
   // [20261020] 含评论标记：分类模块已把「考生讨论」并进 solution，标量 hasComment / cmtTotal
   //   能进视图记录，所以优先读它们。
   // [CMT 2026-10-22] 兜底（补齐 20261020 的缺口）：iCloud「题库 有评论」整批只把「考生讨论」
@@ -8432,10 +8443,33 @@ function getFilterBaseQuestions(){
   // 来源（改为包含匹配，所有分区生效）
   if(filterState.source && filterState.source!=='all'){
     var sourceValue = filterState.source;
-    qs=qs.filter(function(q){ return (q.source || '').includes(sourceValue); });
+    qs=qs.filter(function(q){ return srcOrTagMatch(q, sourceValue); });
   }
   _gfbMemo.sig = sig; _gfbMemo.arr = qs;
   return qs.slice();
+}
+
+// [2026-10-29] 公基题数：直接用分区视图记录数，**不依赖** window._sourceCount。
+//   踩过的坑：_sourceCount 由 updateFilterOptions 计算，而 renderModuleBar 可能先跑
+//   （首次渲染只算到 10900，刷新后干脆是 0），导致按钮题数错或按钮根本不出现。
+var _gjCountCache = { key: '', n: 0 };
+function gongjiTagCount(){
+  if(activeZone !== 'sy') return 0;
+  var arr = getZoneQuestions('sy', '__all__') || [];
+  var key = _dbEpoch + '|' + arr.length;
+  if(_gjCountCache.key === key) return _gjCountCache.n;
+  var n = 0;
+  for(var i = 0; i < arr.length; i++){
+    var q = arr[i];
+    if(!q) continue;
+    var t = q._tagText;
+    if(t && t.indexOf('公基') !== -1){ n++; continue; }
+    var tags = q._tags;
+    if(Array.isArray(tags) && tags.indexOf('公基') !== -1) n++;
+  }
+  _gjCountCache.key = key;
+  _gjCountCache.n = n;
+  return n;
 }
 
 function renderModuleBar(){
@@ -8496,6 +8530,12 @@ function renderModuleBar(){
       counts[m]++;
     });
     var html = '<button class="module-btn ' + (filterState.module === 'all' ? 'active' : '') + '" data-module="all">📂 全部<span class="count">' + counts.all + ' 题</span></button>';
+    // [2026-10-29] 公基视图入口：常驻在「📂 全部」右侧，一眼可见。
+    //   此前只放进「状态」下拉里，不展开下拉就完全看不到，用户反馈「根本没有看到」。
+    var _gjTotal = gongjiTagCount();
+    if(activeZone === 'sy' && _gjTotal > 0){
+      html += '<button class="module-btn gongji-enter-btn' + (filterState.source === '公基' ? ' active' : '') + '" data-module="__gongji__" title="只看带「公基」跨卷标签的题；再点一次取消">🏷 公基<span class="count">' + _gjTotal + ' 题</span></button>';
+    }
     // 已知模块按固定顺序优先展示，其余（含“未分类”）按题数从多到少追加
     var orderedModules = MODS.filter(function(m) { return counts[m] && counts[m] > 0; });
     Object.keys(counts).sort(function(a, b) { return counts[b] - counts[a]; }).forEach(function(m) {
@@ -8511,8 +8551,13 @@ function renderModuleBar(){
 
   moduleBar.querySelectorAll('.module-btn').forEach(function(b) {
     b.onclick = function() {
+      // [2026-10-29] 公基不是模块，是跨卷标签构成的视图：切换它不动 module
+      if(this.dataset.module === '__gongji__'){ setGongjiView(filterState.source !== '公基'); return; }
+      var _gjBtn = moduleBar.querySelector('.gongji-enter-btn');
       moduleBar.querySelectorAll('.module-btn').forEach(function(x) { x.classList.remove('active'); });
       this.classList.add('active');
+      // 公基视图下再点模块 = 叠加筛选，公基按钮要保持高亮
+      if(_gjBtn && filterState.source === '公基') _gjBtn.classList.add('active');
       filterState.module = this.dataset.module;
       filterState.subType = 'all';
       filterState.leafType = 'all';
@@ -8603,7 +8648,7 @@ function updateFilterOptions() {
       '<option value="note">📝 只显示心得</option>' +
       '<option value="commented">💬 只显示有评论</option>';
   }
-  if(activeZone==='sl' || activeZone==='zy' || activeZone==='ms') return;
+  if(activeZone==='sl' || activeZone==='zy' || activeZone==='ms'){ syncGongjiStatusOption(0); return; }
   yearFilter.style.display='';
   provinceFilter.style.display='';
   sourceFilter.style.display='';
@@ -8651,6 +8696,20 @@ function updateFilterOptions() {
         years.add(yearToken);
         yearCount[yearToken] = (yearCount[yearToken] || 0) + 1;
     });
+
+    // [2026-10-29] 「公基」是跨卷标签，不是一个真实来源名。
+    //   来源框是 datalist：change 只接受 window.sourceValues 里的**精确值**，
+    //   直接在框里打字会被判成「不存在的来源」→ 重置为全部来源（实测筛出 0 题）。
+    //   所以把标签当成一个伪来源塞进候选表，让「点选」这条正常路径能选中它；
+    //   真正的匹配交给 srcOrTagMatch（source ∪ _tagText）。
+    var __tagCount = 0;
+    getZoneQuestions(activeZone, '__all__').forEach(function(q) {
+        var tt = q && q._tagText;
+        if(typeof tt === 'string' && tt.indexOf('|公基|') !== -1) __tagCount++;
+    });
+    if(__tagCount > 0){
+        sourceCount['公基'] = (sourceCount['公基'] || 0) + __tagCount;
+    }
 
     if (activeZone === 'mk' && years.size < 2) {
         var files = db.mk || {};
@@ -8719,10 +8778,69 @@ function updateFilterOptions() {
         });
     }
 
+    // [2026-10-29] 「公基」伪来源排到最前（它没有年份，按年份排会沉到末尾，不好找）
+    if(sourceCount['公基']){
+        uniqueSources = ['公基'].concat(uniqueSources.filter(function(s){ return s !== '公基'; }));
+    }
+
     window.sourceValues = uniqueSources;
     window._sourceCount = sourceCount;
 
     renderSourceSuggestions();
+    syncGongjiStatusOption(sourceCount['公基'] || 0);
+}
+
+// [2026-10-29] 公基入口：并进筛选栏的「状态」下拉，紧跟「全部状态」这一项。
+//   跨卷标签不是真实来源，放进状态下拉当「专题视图」用：选中它 = 状态回「全部」+ 来源置「公基」。
+//   与「来源」框里那条伪来源是同一个筛选条件，两处互相同步。
+var GONGJI_STATUS_VALUE = '__gongji__';
+
+function syncGongjiStatusOption(count){
+  if(!statusFilter) return;
+  // 以实际题数为准（count 参数仅作兼容保留）：_sourceCount 可能算得比本函数晚或是半成品
+  var n = gongjiTagCount();
+  var opt = null;
+  for(var i = 0; i < statusFilter.options.length; i++){
+    if(statusFilter.options[i].value === GONGJI_STATUS_VALUE){ opt = statusFilter.options[i]; break; }
+  }
+  var show = (activeZone === 'sy') && n > 0;
+  if(!show){
+    if(opt) opt.parentNode.removeChild(opt);
+    if(statusFilter.value === GONGJI_STATUS_VALUE) statusFilter.value = filterState.status || 'all';
+    return;
+  }
+  if(!opt){
+    opt = document.createElement('option');
+    opt.value = GONGJI_STATUS_VALUE;
+    opt.title = '跨卷标签：只看带「公基」标签的题（可与模块/题型/细分叠加）';
+    // 紧随「全部状态」之后，让入口在第一屏第一格就看得见
+    var first = statusFilter.querySelector('option[value="all"]');
+    if(first && first.nextSibling) statusFilter.insertBefore(opt, first.nextSibling);
+    else statusFilter.appendChild(opt);
+  }
+  opt.textContent = '🏷 公基（跨卷标签，' + n + ' 题）';
+  if(filterState.source === '公基') statusFilter.value = GONGJI_STATUS_VALUE;
+  else if(statusFilter.value === GONGJI_STATUS_VALUE) statusFilter.value = filterState.status || 'all';
+}
+
+// 打开/关闭「公基视图」：状态与标签互斥，避免状态下拉显示与实际筛选不一致
+function setGongjiView(on){
+  filterState.source = on ? '公基' : 'all';
+  filterState.status = 'all';
+  // 视图级切换：一并清掉模块/题型/细分，保证点一下就看到全部公基题（之后仍可再叠加）
+  filterState.module = 'all';
+  filterState.subType = 'all';
+  filterState.leafType = 'all';
+  if(sourceFilter) sourceFilter.value = on ? '公基' : '';
+  if(moduleFilter) moduleFilter.value = 'all';
+  if(statusFilter) statusFilter.value = on ? GONGJI_STATUS_VALUE : 'all';
+  currentPage = 1;
+  saveView();
+  renderModuleBar();
+  if(typeof window.updateSubTypeFilter === 'function') window.updateSubTypeFilter();
+  refreshFilterCounters();
+  renderQuestions();
+  syncGongjiStatusOption();
 }
 
 // 刷新 #sortFilter 的区间选项文字（追加各区间题数），并保持/修复当前选中值
@@ -8804,13 +8922,16 @@ function renderSourceSuggestions(query) {
     var keyword = String(query || '').trim().toLowerCase();
 
     // 过滤匹配的来源
+    // [2026-10-29] 「公基」由上面的固定项单独渲染，这里排除掉，避免下拉里出现两条一模一样的
+    var _hasGongji = !!(window._sourceCount && window._sourceCount['公基']);
     var allMatches = (window.sourceValues || []).filter(function(source) {
+        if(_hasGongji && source === '公基') return false;
         var provinceMatch = sourceMatchesProvince(source, sourceProvince);
         var keywordMatch = !keyword || source.toLowerCase().includes(keyword);
         return provinceMatch && keywordMatch;
     });
 
-    var totalSources = allMatches.length;
+    var totalSources = allMatches.length + (_hasGongji ? 1 : 0);
     var pageSize = 50;
     var totalPages = Math.max(1, Math.ceil(totalSources / pageSize));
     
@@ -8835,6 +8956,11 @@ function renderSourceSuggestions(query) {
         html += '<option disabled style="color:#2563eb;font-weight:bold;">🔍 搜索: "' + keyword + '" 找到 ' + totalSources + ' 个结果</option>';
     } else {
         html += '<option disabled style="color:#2563eb;font-weight:bold;">📚 共 ' + totalSources + ' 个来源，第 ' + (currentPage + 1) + '/' + totalPages + ' 页</option>';
+    }
+
+    // [2026-10-29] 跨卷标签入口：来源框选中「公基」即可筛出 _tags 含「公基」的题
+    if(_hasGongji && (!keyword || '公基'.indexOf(keyword) !== -1 || keyword.indexOf('公基') !== -1)){
+        html += '<option value="公基" style="color:#0f766e;font-weight:bold;">🏷 公基（跨卷标签，' + window._sourceCount['公基'] + '题）</option>';
     }
 
     // 选项列表
@@ -8866,6 +8992,12 @@ function applyFilterStateToUI(){
   if(provinceFilter) setSelectValue(provinceFilter, filterState.province);
   if(sourceFilter) sourceFilter.value=filterState.source==='all'?'':filterState.source;
   setSelectValue(statusFilter, filterState.status);
+  // [2026-10-29] 公基视图：来源是「公基」时，状态下拉显示「🏷 公基」那一项
+  if(statusFilter && filterState.source === '公基'){
+    for(var _gi = 0; _gi < statusFilter.options.length; _gi++){
+      if(statusFilter.options[_gi].value === GONGJI_STATUS_VALUE){ statusFilter.value = GONGJI_STATUS_VALUE; break; }
+    }
+  }
   // [FIX 20260930 v2] 合并下拉：优先显示 ratioRange（如果设了区间），否则显示 sortBy
   if(sortFilter){
     if(filterState.ratioRange && filterState.ratioRange !== 'all'){
@@ -8878,7 +9010,8 @@ function applyFilterStateToUI(){
   if(minRatioInput) minRatioInput.value=filterState.minRatio;
   if(maxRatioInput) maxRatioInput.value=filterState.maxRatio;
   if(yearFilter) filterState.year=yearFilter.value; if(provinceFilter) filterState.province=provinceFilter.value; if(sourceFilter) filterState.source=sourceFilter.value;
-  if(statusFilter) filterState.status=statusFilter.value;
+  // 「🏷 公基」是视图入口不是合法状态值，别把 __gongji__ 写进 filterState.status
+  if(statusFilter && statusFilter.value !== GONGJI_STATUS_VALUE) filterState.status=statusFilter.value;
   // [FIX 20260930] 只在 sortFilter.value 是合法排序值时回写 sortBy，
   // 防止某些边缘场景把区间值写进 sortBy，导致排序失效。
   // [FIX 20260930 v2] 反写分流：sortFilter 值是 range* → 写 ratioRange；是排序值 → 写 sortBy
@@ -9081,6 +9214,32 @@ function getSpecialQuestionType(question){
   return '未分类';
 }
 // skipSort=true 时只做筛选不做排序（供「统计题数」这类只关心集合、不关心顺序的场景使用）
+// ============================================================
+// [2026-10-29] 来源框兼做「跨卷标签」匹配
+// ------------------------------------------------------------
+// 背景：公基专题的题并入事业单位总库后，逐题打了 _tags:["公基"]；
+//   为不动已调好的筛选栏九宫格布局，不新增筛选控件，
+//   而是让「来源」输入框同时匹配 source 与 _tags。
+// 规则：输入「公基」→ 命中 source 含该词的题 + _tags 含该词的题；
+//   其余关键词行为不变（仅多了 tags 这一路），原有来源筛选不受影响。
+// ============================================================
+function srcOrTagMatch(q, keyword){
+  var kw = String(keyword || '');
+  if(!kw) return true;
+  if(String((q && q.source) || '').indexOf(kw) !== -1) return true;
+  var tags = q && q._tags;                       // 原始题对象（正文已挂载时才有）
+  if(Array.isArray(tags)){
+    for(var i = 0; i < tags.length; i++){
+      if(String(tags[i] || '').indexOf(kw) !== -1) return true;
+    }
+  }
+  // [2026-10-29] 视图记录上的标签是压平的标量串 "|公基|"（见 prepareQuestion）。
+  //   筛选走的是视图记录，**这一路才是实际生效的那条**。
+  var tt = q && q._tagText;
+  if(typeof tt === 'string' && tt !== '' && tt.indexOf(kw) !== -1) return true;
+  return false;
+}
+
 function getFiltered(skipSort){
   let qs=getZoneQuestions(activeZone, '__all__');
   const kw=normalizeSearchText(filterState.search);
@@ -9152,7 +9311,7 @@ function getFiltered(skipSort){
   // 来源（改为包含匹配，所有分区生效）
   if(filterState.source && filterState.source!=='all'){
     var sourceValue = filterState.source;
-    qs=qs.filter(function(q){ return (q.source || '').includes(sourceValue); });
+    qs=qs.filter(function(q){ return srcOrTagMatch(q, sourceValue); });
   }
 
   // 做题状态
@@ -10064,7 +10223,14 @@ window.fullDiagnosticScan = function() {
 
     // ----- 1.6 检查筛选状态 -----
     if (filterState.source && filterState.source !== 'all') {
-        var sourceExists = (window.sourceValues || []).some(function(s) { return s === filterState.source; });
+        var _sv = filterState.source;
+        var sourceExists = (window.sourceValues || []).some(function(s) { return s === _sv || s.indexOf(_sv) !== -1; });
+        // [2026-10-29] 兼容 _tags 跨卷标签（如「公基」）：标签命中也算「存在」
+        if (!sourceExists) {
+            try {
+                sourceExists = getZoneQuestions(activeZone, '__all__').some(function(q) { return srcOrTagMatch(q, _sv); });
+            } catch (e) { sourceExists = true; }
+        }
         if (!sourceExists) {
             issues.push({ level: 'warning', type: '筛选', message: '当前选中的来源 "' + filterState.source + '" 不存在', fix: '点击"清除筛选"重置' });
         }
@@ -11626,6 +11792,13 @@ function switchZone(z){
   if(restoredStudyPosition){
     currentPage=Math.max(1, Number(restoredStudyPosition.page)||1);
   }
+  // [2026-10-29] 重置 renderAll 的「视图未就绪」重入标记。
+  //   该标记按 (zone + dbEpoch) 去重，而**同一分区反复进出时 dbEpoch 不变** ⇒
+  //   第二次进入这个分区时，闸门误以为已经重试过、直接拿空记录渲染：
+  //   题目列表靠后续 renderQuestions 补上了，但 updateFilterOptions 不会再跑，
+  //   结果「来源」下拉变成空表（实测：切走再切回，sourceValues 从 189 条变 0 条，
+  //   连「公基」在内的所有来源都选不出来）。切换时清空标记即可正常重建。
+  _renderAllViewRetry = null;
   saveView(); renderAll();
   // C2-B：cleanInvalidWrongSilent 的白名单依赖「本分区题目 Key 全集」（zoneDataComplete 已加守卫）。
   //   视图未就绪时它会直接跳过清理 ⇒ 这里等视图就绪后再执行，保持与旧实现相同的行为时序语义。
@@ -13967,6 +14140,19 @@ sourceFilter.addEventListener('input', function(e) {
 sourceFilter.addEventListener('keydown', function(e) {
     // ====== 回车键跳转到指定页 ======
     if (e.key === 'Enter') {
+        // [2026-10-29] 回车先当成「确认当前来源」：输入/选中「公基」等候选值后
+        //   直接按回车即可生效，不必再点别处触发 change（否则会被当成页码输入吞掉）。
+        var _typed = this.value.trim();
+        if(_typed && window.sourceValues && window.sourceValues.indexOf(_typed) !== -1){
+            filterState.source = _typed;
+            currentPage = 1;
+            saveView();
+            refreshFilterCounters();
+            renderQuestions();
+            syncGongjiStatusOption();
+            this.blur();
+            return;
+        }
         var val = parseInt(this.value.trim());
         var totalPages = 1;
         // 计算总页数
@@ -13996,6 +14182,7 @@ sourceFilter.addEventListener('keydown', function(e) {
         renderSourceSuggestions('');
         refreshFilterCounters();
         renderQuestions();
+        syncGongjiStatusOption();
         this.blur();
     }
 });
@@ -14011,8 +14198,19 @@ sourceFilter.addEventListener('change', function() {
   saveView();
   refreshFilterCounters();
   renderQuestions();
+  syncGongjiStatusOption();
 });
-statusFilter.addEventListener('change', ()=>{ filterState.status=statusFilter.value; currentPage=1; saveView(); refreshFilterCounters(); renderQuestions(); });
+statusFilter.addEventListener('change', ()=>{
+  // [2026-10-29] 下拉里的「🏷 公基」是专题视图，不是真实做题状态
+  if(statusFilter.value === GONGJI_STATUS_VALUE){ setGongjiView(true); return; }
+  // 选了具体做题状态 → 退出公基视图（两者共用一个下拉，互斥以免显示与实际不一致）
+  if(filterState.source === '公基'){
+    filterState.source = 'all';
+    if(sourceFilter) sourceFilter.value = '';
+  }
+  filterState.status=statusFilter.value; currentPage=1; saveView(); refreshFilterCounters(); renderQuestions();
+  syncGongjiStatusOption();
+});
 sortFilter.addEventListener('change', ()=>{
   // [FIX 20260930 v2] 合并下拉：一个框，既能选排序，也能选区间
   var v = sortFilter.value;
