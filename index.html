@@ -6462,21 +6462,44 @@ function detectZone(name){
   if(/粉笔.*\d{4}年|粉笔[_-]?\d{4}/.test(name)) return 'mk';
   return '';
 }
-const ESSAY_PROVINCES = ['国考','安徽','北京','福建','甘肃','广东','广西','贵州','海南','河北','河南','黑龙江','湖北','湖南','吉林','江苏','江西','辽宁','内蒙古','宁夏','青海','山东','山西','陕西','上海','四川','天津','新疆','云南','浙江','重庆','广州','深圳','联考'];
+const ESSAY_PROVINCES = ['国考','安徽','北京','福建','甘肃','广东','广西','贵州','海南','河北','河南','黑龙江','湖北','湖南','吉林','江苏','江西','辽宁','内蒙古','宁夏','青海','山东','山西','陕西','上海','四川','天津','西藏','新疆','云南','浙江','重庆','广州','深圳','联考'];
 const ESSAY_PROVINCE_ALIASES = {
   '国家公务员': '国考',
   '国家公考': '国考',
   '副省级': '国考',
   '副省': '国考',
   '地市级': '国考',
-  '地市': '国考'
+  '地市': '国考',
+  // [FIX 20261031] 全国统一命题的卷子卷名里本来就没有省份，原先全落进「其他」。
+  //   「全国事业单位X类考试」「事业单位公开招聘分类考试」本身就是事业单位联考，归联考。
+  '全国事业单位': '联考',
+  '事业单位公开招聘分类考试': '联考'
 };
 function extractProvince(paperName){
   const name=String(paperName||'');
+  // [FIX 20261031] 粉笔「MMDD综应小模考」是线上模考，本来就没有地区。
+  //   以前一律落「其他」，和真正归不了类的题混在一起；单列成「线上模考」更准确。
+  if(name.includes('小模考')) return '线上模考';
   for(const alias in ESSAY_PROVINCE_ALIASES){
     if(name.includes(alias)) return ESSAY_PROVINCE_ALIASES[alias];
   }
   for(const province of ESSAY_PROVINCES){ if(name.includes(province)) return province; }
+  return '其他';
+}
+// 综应「话题」维度：粉笔没有给综应配主题标签（不像申论自带 topic），
+// 只有卷名里能读到的**考试类别**。这里严格按卷名字面关键词归类，不做语义推断：
+//   命中 «A类/B类…» → 事业单位分类统考；小模考 → 线上模考；其余按招考类型分桶。
+//   都匹配不上就归「其他」，绝不猜。
+function extractEssayTopic(paperName){
+  const n=String(paperName||'');
+  const m=n.match(/([A-E])\s*类/);
+  if(m) return m[1]+'类';
+  if(n.includes('小模考')) return '线上模考';
+  if(/教师|教育局|中小学校|特岗/.test(n)) return '教师招聘';
+  if(/三支一扶|选调|村官|社区工作者|公益性岗位|党务工作者/.test(n)) return '基层项目';
+  if(/农商|农信|信用社|银行|金融/.test(n)) return '金融招考';
+  if(/烟草|石油|石化|电网|铁路|航空|邮政|集团|公司|企业/.test(n)) return '国企招考';
+  if(/事业单位|事业编|公开招聘/.test(n)) return '事业单位统考';
   return '其他';
 }
 function getYear(paperDate){ return String(paperDate||'').substring(0,4)||'未知'; }
@@ -7134,7 +7157,6 @@ function handleFiles(fileListArr){
         // ★ 综应原生格式：{ part, questions:[...], materialsByPaper:{...} }
         //   每题自带 _paperName / _paperId / _materials，直接把每题当一套"试卷"
         var __mzPre = (typeof zoneSelect !== 'undefined' && zoneSelect && zoneSelect.value) ? zoneSelect.value : '';
-        var __zoneChosenExplicitly = (__mzPre && __mzPre !== 'auto');
         // [NEW 20260923-v5] JSON 可自带分区意图：顶层 _zone（如 "mk"）。
         //   只在「自动识别」时生效；用户在下方下拉框显式选的分区**优先于**它。
         //   用途：导出脚本明确指定这批题归哪个分区，不必依赖文件名命中的正则顺序。
@@ -7145,8 +7167,14 @@ function handleFiles(fileListArr){
         // [FIX 20260923-v2] 用户显式选分区(如mk)时不走综应启发式识别
         // [FIX 20260923-v4] auto 时：仅当 detectZone 判定为 zy(综应) 才走综应改写；
         //   否则（mk/gk/sl 等）保持原始题目结构，避免把行测模考包装成综应试卷壳导致渲染不出题目
+        // [FIX 20261031] 去掉 !__zoneChosenExplicitly 这个前提。
+        //   原逻辑只在「自动识别」时包装综应试卷壳，用户在下拉里手动选「综应」反而**不**包装，
+        //   而 buildEssayPreparedFile 只认 paper._essay ⇒ 整个分区展开成 0 题。
+        //   现在：显式选 zy，或文件名被判成 zy，都按综应包装；
+        //   仍然要求 looksLikeZy（带 _paperName/_paperId/_materials），所以行测题误选 zy 不会被错包。
         var __dz4 = __hintZone || detectZone(file.name);
-        if(__dz4==='zy' && !__zoneChosenExplicitly && !essayPapers && raw && typeof raw === 'object' && Array.isArray(raw.questions)){
+        var __wantZy = (__dz4==='zy') || (__mzPre==='zy');
+        if(__wantZy && !essayPapers && raw && typeof raw === 'object' && Array.isArray(raw.questions)){
           const looksLikeZy = raw.questions.some(function(q){
             return q && typeof q === 'object' &&
               (q._paperName !== undefined || q._paperId !== undefined || Array.isArray(q._materials));
@@ -7161,7 +7189,9 @@ function handleFiles(fileListArr){
                 paperDate: '',
                 year: extractYearForZy(q._paperName || q.source || ''),
                 province: extractProvince(q._paperName || '') || '其他',
-                topic: '综应',
+                // [FIX 20261031] 原先是常量 '综应'，导致「话题」下拉永远只有一项。
+                //   改为按卷名归类（extractEssayTopic），与省份同一套「只读字面信息」原则。
+                topic: extractEssayTopic(q._paperName || ''),
                 materials: materials,
                 essayQuestions: [ q ],
                 content: q._paperName || '',
@@ -8132,11 +8162,40 @@ function getZoneQuestions(zone, fileId){
 }
 
 // 申论/综应展开：保持原有逐题 Object.assign 逻辑（试卷壳 + 材料 + 真实题号）
+// ============================================================
+// [FIX 20261031] 试卷的「年份 / 省份 / 话题」三个展示字段一律**按卷名现算**，
+//   算不出来才退回导入时存下的值。原因：
+//   · 综应导入时把 topic 写死成常量 '综应'，话题下拉永远只有一项；
+//   · 省份/年份的归类规则改了以后（西藏白名单、全国事业单位→联考、小模考卷名补年份），
+//     已导入的老数据里存的是旧值，不重算就永远是旧的。
+//   现算的输入只有 paperName，纯函数、幂等，申论重算结果与导入时完全一致。
+// ============================================================
+function essayPaperFields(zone, paper){
+  var name=paper.paperName||'';
+  var storedProv=(paper.province && paper.province!==paper._year) ? paper.province : '';
+  var byNameProv=name ? extractProvince(name) : '';
+  // 卷名能给出具体地区/口径就用它（能盖掉历史存的「其他」或误判的「安徽」）；
+  // 卷名归不了类时才退回存值 / _region。
+  var prov=(byNameProv && byNameProv!=='其他') ? byNameProv
+         : (storedProv || byNameProv || paper._region || '其他');
+  var storedTopic=paper.topic||'';
+  var byNameTopic=(zone==='zy' && name) ? extractEssayTopic(name) : '';
+  var topic=(zone==='zy')
+    ? ((byNameTopic && byNameTopic!=='其他') ? byNameTopic
+        : ((storedTopic && storedTopic!=='综应') ? storedTopic : (byNameTopic||storedTopic||'')))
+    : storedTopic;
+  return {
+    year: paper.year||paper._year||getYear(paper.paperDate)||'',
+    topic: topic,
+    province: prov
+  };
+}
 function buildEssayPreparedFile(zone, f){
   var arr=[];
   (f.questions||[]).forEach((paper,paperIndex)=>{
     if(!paper || !paper._essay || !Array.isArray(paper.essayQuestions)) return;
     const paperMaterials=Array.isArray(paper.materials)?paper.materials:[];
+    const pf=essayPaperFields(zone, paper);
     // 先按「题目 ↔ 材料」关系推断真实试卷题号（写入 _paperQuestionNo），再按题号排序。
     // 注意：fullData / questionIds 的数组顺序不代表试卷题号，不能直接用下标当题号。
     const orderedQuestions=computeEssayPaperQuestionNos(paper.essayQuestions.slice(), paperMaterials);
@@ -8153,9 +8212,9 @@ function buildEssayPreparedFile(zone, f){
         _key:key,
         _zone:zone,
         _paperName:paper.paperName||'',
-        _paperYear:paper.year||paper._year||getYear(paper.paperDate)||'',
-        _paperTopic:paper.topic||'',
-        _paperProvince:(paper.province&&paper.province!==paper._year)?paper.province:(extractProvince(paper.paperName)||paper._region||''),
+        _paperYear:pf.year,
+        _paperTopic:pf.topic,
+        _paperProvince:pf.province,
         _paperId:paper.paperId||'',
         _materials:paperMaterials,
         _isEssayQuestion:true,
@@ -8589,7 +8648,7 @@ function updateEssaySelects(){
       if(b==='国考'&&a!=='国考') return 1;
       return String(a).localeCompare(String(b),'zh-CN');
     })+
-    buildEssaySelect(p+'TopicFilter','全部话题',getEssayOptionStats('subType'))+
+    buildEssaySelect(p+'TopicFilter',activeZone==='zy'?'全部类别':'全部话题',getEssayOptionStats('subType'))+
     buildEssaySelect(p+'LeafFilter','全部题型',getEssayOptionStats('leafType'))+
     '<button class="essay-dynamic" id="'+p+'ClearFilter" type="button"><svg class="sf-clear-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7.8"/><path d="M9.4 9.4l5.2 5.2M14.6 9.4l-5.2 5.2"/></svg><span>清除筛选</span></button>'+
     '<div class="essay-dynamic essay-filter-stats">共 '+getEssayQuestions().length+' 题 · 筛选后 '+getFiltered().length+' 题</div>');
@@ -15942,25 +16001,50 @@ window.updateSubTypeFilter = function() {
   if(activeZone==='sl' || activeZone==='zy') return;
   if(activeZone==='ms'){
     var specialQs=getZoneQuestions(activeZone,'__all__');
-    var unique=function(list){ return Array.from(new Set(list.filter(Boolean))); };
-    // 统计题数并生成带题数的选项：`名称 (N题)`
-    var buildStats=function(list){
-      var stats={};
-      list.forEach(function(value){ value=value||'其他'; stats[value]=(stats[value]||0)+1; });
-      return stats;
-    };
     var makeOptions=function(label,stats,order){
       var keys=Object.keys(stats);
       if(order){ keys.sort(function(a,b){ var ia=order.indexOf(a), ib=order.indexOf(b); if(ia===-1&&ib===-1) return a.localeCompare(b,'zh-CN'); if(ia===-1) return 1; if(ib===-1) return -1; return ia-ib; }); }
       else { keys.sort(function(a,b){ return a.localeCompare(b,'zh-CN'); }); }
       return '<option value="all">'+label+'</option>'+keys.map(function(value){ return '<option value="'+escapeHtml(value)+'">'+escapeHtml(value)+' ('+stats[value]+'题)</option>'; }).join('');
     };
-    // 面试题目本身没有 year 字段，年份统一从「试卷名 / 来源」里的 4 位年份提取（与筛选、默认排序同口径）
-    var msYearStats={};
-    specialQs.forEach(function(q){ var y=extractYear(q.paperName||q.source||''); if(y) msYearStats[y]=(msYearStats[y]||0)+1; });
-    var topics=unique(specialQs.map(function(q){ return q.topic||'其他'; })).sort();
-    var regions=unique(specialQs.map(function(q){ return q.region||'其他'; })).sort();
-    var types=activeZone==='sl' ? unique([].concat.apply([],specialQs.map(function(q){ return (q.essayQuestions||[]).map(getSpecialQuestionType); }))).sort() : unique(specialQs.map(getSpecialQuestionType)).sort();
+    // 面试题目本身没有 year 字段，年份统一从「试卷名 / 来源」里的 4 位年份提取（与筛选、默认排序同口径）。
+    // [FIX 20261031] 必须 String()：extractYear 返回的是**数字**（抠不出时返回 0），
+    //   而 filterState.year 与下拉 value 都是字符串。不转的话 `!==` 永远成立，
+    //   一等年份就会把所有题过滤光，另外两个下拉直接空掉。
+    var msYearOf=function(q){ var y=extractYear(q.paperName||q.source||''); return y?String(y):''; };
+    var msRegionOf=function(q){ return q.region||'其他'; };
+    // ============================================================
+    // [FIX 20261031] 年份 / 地区 / 题型三个下拉改成互相级联。
+    //   原实现：三个下拉都按「分区全集」统计 ⇒ 选了年份，地区列表不收缩；
+    //     年份×地区 473 个组合里有 29 个（6%）点进去是 0 题，且不会自动回退。
+    //   现在：统计某一项时套用另外两项的条件（与申论/综应 getEssayOptionStats 同一思路），
+    //     0 题的组合根本不会出现在选项里；已选值若在新条件下不存在，自动退回「全部」。
+    // collectMsStats(self)：self 指「本次要统计的那一维」，统计它时不套用它自己的条件。
+    //   三个计数器一律累加（很便宜），由调用方各取所需 —— 别按 self 去挑计数器，
+    //   那样 self='province' 时 regions 会永远是空对象，地区下拉直接变空白。
+    var collectMsStats=function(self){
+      var ys={}, rs={}, ts={};
+      for(var i=0;i<specialQs.length;i++){
+        var q=specialQs[i];
+        var y=msYearOf(q), r=msRegionOf(q), t=getSpecialQuestionType(q);
+        if(self!=='year' && filterState.year!=='all' && y!==filterState.year) continue;
+        if(self!=='province' && filterState.province!=='all' && r!==filterState.province) continue;
+        if(self!=='type' && filterState.module!=='all' && t!==filterState.module) continue;
+        if(y) ys[y]=(ys[y]||0)+1;
+        rs[r]=(rs[r]||0)+1;
+        ts[t]=(ts[t]||0)+1;
+      }
+      return {years:ys,regions:rs,types:ts};
+    };
+    // 已选值失效 → 退回「全部」。做两轮：第一轮退回后可能暴露另一维也失效，第二轮兜住。
+    for(var guard=0;guard<2;guard++){
+      var all=collectMsStats('');
+      var fixed=false;
+      if(filterState.year!=='all' && !all.years[filterState.year]){ filterState.year='all'; fixed=true; }
+      if(filterState.province!=='all' && !all.regions[filterState.province]){ filterState.province='all'; fixed=true; }
+      if(filterState.module!=='all' && !all.types[filterState.module]){ filterState.module='all'; fixed=true; }
+      if(!fixed) break;
+    }
     yearFilter.style.display='';   /* [UI 2026-10-21d] 面试分区增加「年份」筛选，排在「地区」前面 */
     provinceFilter.style.display='';
     sourceFilter.style.display='none';
@@ -15969,33 +16053,22 @@ window.updateSubTypeFilter = function() {
     moduleFilter.style.display='';
     subTypeFilter.style.display='none';
     leafTypeFilter.style.display='none';
+    var msYearStats=collectMsStats('year').years;
     yearFilter.innerHTML='<option value="all">全部年份</option>'+Object.keys(msYearStats).sort(function(a,b){ return Number(b)-Number(a); }).map(function(y){ return '<option value="'+y+'">'+y+'年 ('+msYearStats[y]+'题)</option>'; }).join('');
-    // 地区选项：显示题数
-    var regionStats=buildStats(specialQs.map(function(q){ return q.region||'其他'; }));
-    provinceFilter.innerHTML=makeOptions(activeZone==='sl'?'全部话题':'全部地区',activeZone==='sl'?buildStats(specialQs.map(function(q){ return q.topic||'其他'; })):regionStats);
-    // 题型选项：按当前选中的地区联动统计题数
-    var selectedRegion=filterState.province||'all';
-    var typeSourceQs=(activeZone==='sl'||selectedRegion==='all') ? specialQs : specialQs.filter(function(q){ return (q.region||'其他')===selectedRegion; });
-    var typeStats=buildStats(typeSourceQs.map(getSpecialQuestionType));
+    // 地区选项：按「年份 + 题型」联动统计（0 题的组合不会出现）
+    var regionStats=collectMsStats('province').regions;
+    provinceFilter.innerHTML=makeOptions('全部地区',regionStats);
+    // 题型选项：按「年份 + 地区」联动统计
+    var typeStats=collectMsStats('type').types;
     moduleFilter.innerHTML=makeOptions('全部题型',typeStats);
     setSelectValue(yearFilter,filterState.year);
     setSelectValue(provinceFilter,filterState.province);
-    setSelectValue(moduleFilter,activeZone==='sl'?filterState.leafType:filterState.module);
-    searchBox.placeholder=activeZone==='sl'?'🔍 搜索试卷、题干、材料或答案...':'🔍 搜索题干、来源、材料或解析...';
-    yearFilter.onchange=function(){ filterState.year=this.value; currentPage=1; saveView(); renderQuestions(); };
-    provinceFilter.onchange=function(){
-      filterState.province=this.value;
-      // 地区变化时联动刷新题型选项的题数
-      filterState.module='all';
-      currentPage=1; saveView();
-      window.updateSubTypeFilter();
-      renderQuestions();
-    };
-    moduleFilter.onchange=function(){
-      if(activeZone==='sl') filterState.leafType=this.value;
-      else filterState.module=this.value;
-      currentPage=1; saveView(); renderQuestions();
-    };
+    setSelectValue(moduleFilter,filterState.module);
+    searchBox.placeholder='🔍 搜索题干、来源、材料或解析...';
+    // 三个下拉互相影响，改任意一个都要重建另外两个的选项
+    yearFilter.onchange=function(){ filterState.year=this.value; currentPage=1; saveView(); window.updateSubTypeFilter(); renderQuestions(); };
+    provinceFilter.onchange=function(){ filterState.province=this.value; currentPage=1; saveView(); window.updateSubTypeFilter(); renderQuestions(); };
+    moduleFilter.onchange=function(){ filterState.module=this.value; currentPage=1; saveView(); window.updateSubTypeFilter(); renderQuestions(); };
     return;
   }
 
