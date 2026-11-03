@@ -3802,7 +3802,7 @@ async function enPasteArticle(){ const text=prompt('请粘贴英文文章（点�
 async function enAddArticle(title,content){ const articles=await enGetArticles(); const article={id:'a_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),title:title,content:content,createdAt:Date.now(),parsed:null}; articles.unshift(article); await enSetArticles(articles); await enRenderFileList('reading'); await enParseArticle(article.id); }
 async function enRenderArticleList(){return enRenderFileList('reading');}
 async function enDeleteArticle(id){return enDeleteFile('reading',id);}
-async function enParseArticle(id){ const articles=await enGetArticles(), article=articles.find(function(a){return a.id===id;}), area=document.getElementById('enArticleParseArea'); if(!article||!area)return; if(article.parsed){enRenderParsed(article);return;} if(!aiConfig.apiKey){area.innerHTML='<div style="color:#dc2626;padding:20px;">请先配置 AI API Key</div>';return;} const ep=AI_ENDPOINTS[aiConfig.provider]; if(!ep){area.innerHTML='<div style="color:#dc2626;padding:20px;">未知 AI 服务商</div>';return;} area.innerHTML='<div style="padding:20px;text-align:center;">⏳ AI 正在解析...</div>'; try{const response=await axios({method:'post',url:ep.url,headers: aiAuthHeaders(),data:{model:aiConfig.model||ep.model,messages:[{role:'system',content:'你是英语语法专家。请将文章按句切分，输出 JSON：{"sentences":[{"text":"原句","svoc":{"s":"","v":"","o":"","c":""},"slash":"意群/划分","tokens":[{"word":"cat","pos":"n.","meaning":"猫","difficulty":"高中"}]}]}。只输出 JSON。'},{role:'user',content:article.content.substring(0,3000)}],temperature:.3,max_tokens:4000},timeout:60000,proxy:false}); const text=response.data.choices[0].message.content,jsonMatch=text.match(/\{[\s\S]*\}/); if(!jsonMatch)throw new Error('AI 未返回有效 JSON'); article.parsed=JSON.parse(jsonMatch[0]); const all=await enGetArticles(),index=all.findIndex(function(a){return a.id===id;}); if(index>=0)all[index]=article; await enSetArticles(all); await enExtractVocabularyFromParsed(article.parsed); enRenderParsed(article); }catch(e){area.innerHTML='<div style="color:#dc2626;padding:20px;">❌ AI 解析失败：'+escapeHtml(e.message)+'</div>';} }
+async function enParseArticle(id){ const articles=await enGetArticles(), article=articles.find(function(a){return a.id===id;}), area=document.getElementById('enArticleParseArea'); if(!article||!area)return; if(article.parsed){enRenderParsed(article);return;} if(!aiConfig.apiKey){area.innerHTML='<div style="color:#dc2626;padding:20px;">请先配置 AI API Key</div>';return;} const ep=AI_ENDPOINTS[aiConfig.provider]; if(!ep){area.innerHTML='<div style="color:#dc2626;padding:20px;">未知 AI 服务商</div>';return;} area.innerHTML='<div style="padding:20px;text-align:center;">⏳ AI 正在解析...</div>'; try{const response=await axios({method:'post',url:aiLiveUrl(aiConfig.provider),headers: aiAuthHeaders(),data:{model:aiConfig.model||ep.model,messages:[{role:'system',content:'你是英语语法专家。请将文章按句切分，输出 JSON：{"sentences":[{"text":"原句","svoc":{"s":"","v":"","o":"","c":""},"slash":"意群/划分","tokens":[{"word":"cat","pos":"n.","meaning":"猫","difficulty":"高中"}]}]}。只输出 JSON。'},{role:'user',content:article.content.substring(0,3000)}],temperature:.3,max_tokens:4000},timeout:60000,proxy:false}); const text=response.data.choices[0].message.content,jsonMatch=text.match(/\{[\s\S]*\}/); if(!jsonMatch)throw new Error('AI 未返回有效 JSON'); article.parsed=JSON.parse(jsonMatch[0]); const all=await enGetArticles(),index=all.findIndex(function(a){return a.id===id;}); if(index>=0)all[index]=article; await enSetArticles(all); await enExtractVocabularyFromParsed(article.parsed); enRenderParsed(article); }catch(e){area.innerHTML='<div style="color:#dc2626;padding:20px;">❌ AI 解析失败：'+escapeHtml(e.message)+'</div>';} }
 function enRenderParsed(article){ const area=document.getElementById('enArticleParseArea'); if(!area)return; let html='<div class="en-parsed-title">📖 '+escapeHtml(article.title)+'</div><div class="en-parsed-body">'; (article.parsed.sentences||[]).forEach(function(sent){html+='<div class="en-sentence"><div class="en-sentence-slash">'+escapeHtml(sent.slash||sent.text)+'</div>'; if(sent.svoc)html+='<div class="en-svoc">【主干】主：'+escapeHtml(sent.svoc.s||'')+'　谓：'+escapeHtml(sent.svoc.v||'')+'　宾：'+escapeHtml(sent.svoc.o||'')+'　补：'+escapeHtml(sent.svoc.c||'')+'</div>'; if(sent.tokens&&sent.tokens.length){html+='<div class="en-tokens">'; sent.tokens.forEach(function(t){const cls=t.difficulty==='高中'?'lv-hs':t.difficulty==='四级'?'lv-c4':t.difficulty==='六级'?'lv-c6':'lv-easy'; html+='<span class="en-token '+cls+'" title="'+escapeHtml((t.pos||'')+' '+(t.meaning||''))+'">'+escapeHtml(t.word||'')+(t.meaning&&t.difficulty!=='初中'?'<em class="en-token-meaning">'+escapeHtml(t.meaning)+'</em>':'')+'</span> ';}); html+='</div>';} html+='</div>';}); area.innerHTML=html+'</div>'; }
 async function enExtractVocabularyFromParsed(parsed){ const vocab=await enGetVocabulary(); let changed=false; (parsed.sentences||[]).forEach(function(s){(s.tokens||[]).forEach(function(t){if(t.word&&t.meaning&&t.difficulty!=='初中'){const key=t.word.toLowerCase();if(!vocab[key]){vocab[key]={meaning:t.meaning,pos:t.pos||'',difficulty:t.difficulty||'',mastered:false,wrongCount:0,createdAt:Date.now()};changed=true;}}});}); if(changed)await enSetVocabulary(vocab); }
 
@@ -4065,7 +4065,7 @@ async function enLoadWordAIDetail(word) {
   try {
     const response = await axios({
       method: 'post',
-      url: ep.url,
+      url: aiLiveUrl(aiConfig.provider),
       headers: aiAuthHeaders(),
       data: {
         model: aiConfig.model || ep.model,
@@ -4120,7 +4120,7 @@ async function enRenderVocabList(keyword){
 }
 async function enChangeVocabPage(page){if(!window.__enDetailView||window.__enDetailView.moduleType!=='vocabulary')return;window.__enDetailView.page=page;await enRenderVocabList((document.getElementById('enVocabSearch')||{}).value||'');}
 async function enVocabSearchChanged(keyword){if(window.__enDetailView&&window.__enDetailView.moduleType==='vocabulary')window.__enDetailView.page=1;await enRenderVocabList(keyword);}
-async function enAggregateGroups(){ const vocab=await enGetVocabulary(),words=Object.keys(vocab);if(words.length<4){alert('词库太少（至少 4 个词）');return;}if(!aiConfig.apiKey){alert('请先配置 AI API Key');return;}const ep=AI_ENDPOINTS[aiConfig.provider],stats=document.getElementById('enVocabStats');if(!ep)return;if(stats)stats.innerHTML='<div style="padding:12px;text-align:center;">🔗 AI 正在聚类...</div>';try{const response=await axios({method:'post',url:ep.url,headers: aiAuthHeaders(),data:{model:aiConfig.model||ep.model,messages:[{role:'system',content:'请将英文单词按语义聚类，输出 JSON 数组：[ {"name":"情感","emoji":"😊","words":["happy"]} ]，只输出 JSON。'},{role:'user',content:words.slice(0,100).join(', ')}],temperature:.3,max_tokens:2000},timeout:60000,proxy:false});const match=response.data.choices[0].message.content.match(/\[[\s\S]*\]/);if(!match)throw new Error('AI 未返回有效 JSON');const groups=JSON.parse(match[0]).map(function(g,i){return{id:'g_'+Date.now()+'_'+i,name:g.name,emoji:g.emoji||'📁',words:g.words||[]};});groups.forEach(function(g){g.words.forEach(function(w){if(vocab[w.toLowerCase()])vocab[w.toLowerCase()].groupId=g.id;});});await enSetGroups(groups);await enSetVocabulary(vocab);alert('✅ 聚合完成，共 '+groups.length+' 组');await enRenderFileList('vocabulary');}catch(e){alert('AI 聚合失败：'+e.message);await enRenderFileList('vocabulary');} }
+async function enAggregateGroups(){ const vocab=await enGetVocabulary(),words=Object.keys(vocab);if(words.length<4){alert('词库太少（至少 4 个词）');return;}if(!aiConfig.apiKey){alert('请先配置 AI API Key');return;}const ep=AI_ENDPOINTS[aiConfig.provider],stats=document.getElementById('enVocabStats');if(!ep)return;if(stats)stats.innerHTML='<div style="padding:12px;text-align:center;">🔗 AI 正在聚类...</div>';try{const response=await axios({method:'post',url:aiLiveUrl(aiConfig.provider),headers: aiAuthHeaders(),data:{model:aiConfig.model||ep.model,messages:[{role:'system',content:'请将英文单词按语义聚类，输出 JSON 数组：[ {"name":"情感","emoji":"😊","words":["happy"]} ]，只输出 JSON。'},{role:'user',content:words.slice(0,100).join(', ')}],temperature:.3,max_tokens:2000},timeout:60000,proxy:false});const match=response.data.choices[0].message.content.match(/\[[\s\S]*\]/);if(!match)throw new Error('AI 未返回有效 JSON');const groups=JSON.parse(match[0]).map(function(g,i){return{id:'g_'+Date.now()+'_'+i,name:g.name,emoji:g.emoji||'📁',words:g.words||[]};});groups.forEach(function(g){g.words.forEach(function(w){if(vocab[w.toLowerCase()])vocab[w.toLowerCase()].groupId=g.id;});});await enSetGroups(groups);await enSetVocabulary(vocab);alert('✅ 聚合完成，共 '+groups.length+' 组');await enRenderFileList('vocabulary');}catch(e){alert('AI 聚合失败：'+e.message);await enRenderFileList('vocabulary');} }
 
 // ===== 英语模块：语法教材 =====
 function enParseChapters(text){const lines=text.split(/\r?\n/),chapters=[];let current=null,buffer=[];function flush(){if(current){current.content=buffer.join('\n').trim();chapters.push(current);}buffer=[];}lines.forEach(function(line){const m=line.match(/^(#{1,3})\s+(.+)$/);if(m){flush();current={id:'c_'+Date.now()+'_'+chapters.length,level:m[1].length,title:m[2].trim(),content:''};}else if(current)buffer.push(line);});flush();if(!chapters.length)chapters.push({id:'c_'+Date.now(),level:1,title:'正文',content:text.trim()});return chapters;}
@@ -7639,6 +7639,20 @@ function qzProv(p){
   if(p._qzProv===undefined) p._qzProv = testProvince(String(p.source||''));
   return p._qzProv;
 }
+// [FEATURE 2026-11-04] 「省考」是地区下拉里的**聚合筛选项**，不是一个真实省份。
+// 口径：除国考以外的地方考试题。判定只借用 qzProv 的既有结果（它把 source 解析成
+// 「国考 / 某省 · 某直辖市 · 深圳 / 空」），所以：
+//   · qzProv === '国考'      → 不算省考；
+//   · qzProv === '江苏' 等   → 算省考；
+//   · qzProv === ''（source 里没有地区信息，如部分联考卷、广州市考、空 source）
+//     → 也算省考。它们本来就不是国考，落在「省考」里才不会被两头漏掉。
+// 单省筛选的行为完全不变，仍走 qzProv(q)===province 这条原路。
+function qzProvMatch(q, province){
+  if(!province || province==='all') return true;
+  var p = qzProv(q);
+  if(province==='省考') return p!=='国考';
+  return p===province;
+}
 function qzRatioVal(p){
   if(p._qzRatioVal===undefined) p._qzRatioVal = getRatioValue(p);
   return p._qzRatioVal;
@@ -8494,7 +8508,7 @@ function getFilterBaseQuestions(){
     });
   }
   if(filterState.province && filterState.province!=='all'){
-    qs=qs.filter(function(q){ return (activeZone==='sl'||activeZone==='zy') ? (q._paperProvince||q.province||'其他')===filterState.province : qzProv(q)===filterState.province; });
+    qs=qs.filter(function(q){ return (activeZone==='sl'||activeZone==='zy') ? (q._paperProvince||q.province||'其他')===filterState.province : qzProvMatch(q, filterState.province); });
   }
   // 来源（改为包含匹配，所有分区生效）
   if(filterState.source && filterState.source!=='all'){
@@ -8748,6 +8762,11 @@ function updateFilterOptions() {
     }
 
     var yearArray = [...years].sort(function(a, b) { return b - a; });
+    // [FEATURE 2026-11-04] 客观题分区的省份下拉只在页面初始构建过一次；
+    // 中途去过申论/面试会被那两处重建掉（选项变成申论地区 / 面试地区）。
+    // 这里做一次幂等修复，保证切回来时「国考 / 省考 / 各省份」依旧可选。
+    // typeof 守卫：部分回归测试只抽取 renderAll 到沙箱里跑，缺这个函数时不能把整段渲染炸掉。
+    if(typeof ensureObjectiveProvinceOptions==='function') ensureObjectiveProvinceOptions();
     yearFilter.innerHTML = '<option value="all">全部年份</option>' + 
         yearArray.map(function(y) {
             // [FIX 20261023] 选项带题数：用户可直接核对「各年份相加 == 总数」
@@ -8873,6 +8892,8 @@ function refreshRatioRangeOptions(){
 function sourceMatchesProvince(source, province){
   if(!province || province==='all') return true;
   if(province==='国考') return /国考|副省|地市/.test(source);
+  // [FEATURE 2026-11-04] 「省考」= 除国考以外的地方考试，与题目筛选口径保持一致
+  if(province==='省考') return testProvince(String(source||''))!=='国考';
   if(province==='新疆') return /新疆区考|（新疆/.test(source);
   if(province==='江苏') return /（江苏/.test(source);
   if(province==='深圳') return /（深圳/.test(source);
@@ -9224,9 +9245,9 @@ function getFiltered(skipSort){
     }
   }
 
-  // 省份
+  // 省份（「省考」为聚合项：除国考以外的地方考试题，见 qzProvMatch）
   if(filterState.province && filterState.province!=='all'){
-    qs=qs.filter(q=>qzProv(q)===filterState.province);
+    qs=qs.filter(q=>qzProvMatch(q, filterState.province));
   }
 
   // 来源（改为包含匹配，所有分区生效）
@@ -14399,6 +14420,9 @@ const AI_HISTORY_DB_NAME='aiChatHistoryDB';
 const AI_HISTORY_STORE='chats';
 let aiHistoryDb=null;
 let aiConfig={provider:'', apiKey:'', model:'', enableSearch:false};
+// [AI 2026-11-04] urls 是候选端点列表，按顺序尝试、失败自动换下一个（详见 aiFetchFailover）。
+// 只有「同一家确实有多个可用入口」的服务商才配 urls；没配 urls 的服务商一律走 url 单端点，
+// 行为与之改动前完全一致（一趟请求，不额外多试）。
 const AI_ENDPOINTS={
   deepseek:{
     url:'https://api.deepseek.com/chat/completions',
@@ -14411,13 +14435,24 @@ const AI_ENDPOINTS={
     authType:'gemini'
   },
   zhipu:{
-    // 必须用 bigmodel.cn，不能用 open.bigmodel.cn：
-    // open.bigmodel.cn 的 IPv4 入口对 CORS 预检（OPTIONS）返回 200 但**不带 access-control-* 头**，
-    // 而发 POST 带 Authorization / application/json 前浏览器必须先过预检，预检失败就抛
-    // TypeError: Load failed（请求根本发不出去）。手机端是 IPv4 直连 → 必失败；
-    // 桌面走代理时恰好命中 IPv6 入口（IPv6 入口的头是完整的）→ 看起来正常。
-    // bigmodel.cn 是同一套 API、同一把 Key、同样支持 stream，预检头完整。
+    // [AI 2026-11-04 实测更正的旧结论]
+    // 旧注释说「bigmodel.cn 预检头完整、open.bigmodel.cn 不带」——**这条已经失效**。
+    // 现在两个国内入口对 OPTIONS 预检都只回 200 空壳，**不带任何 access-control-allow-***，
+    // 而真实 POST 响应却带着 ACAO。浏览器发 Authorization 前必须先过预检，
+    // 预检不合规就抛 TypeError: Load failed（Safari/WebKit 文案），请求根本发不出去。
+    // 与 Origin 白名单无关：chatglm.cn / example.com / 线上域名实测结果一致。
+    // 对照组 api.deepseek.com、dashscope、api.z.ai 的预检头都完整 → 不是本机网络问题。
+    // 所以这里放三个候选端点，先国内、后国际站：
+    //   · 国内 Key + 国内站 → 仍会 Load failed（平台侧限制，程序救不了）；
+    //   · 有 z.ai 账号的 Key → 前两个 401 快速失败，第三个成功；
+    //   · 全部失败时会把每个端点的原因一起抛出来，方便一眼看出是 CORS 还是 401。
+    // 注意：国内站与 api.z.ai 是**两套账号、两套 Key**，不通用。
     url:'https://bigmodel.cn/api/paas/v4/chat/completions',
+    urls:[
+      'https://bigmodel.cn/api/paas/v4/chat/completions',
+      'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+      'https://api.z.ai/api/paas/v4/chat/completions'
+    ],
     // 注意：glm-4.1 已不在开放平台可用列表，调用返回 400 / code=1211「模型不存在」。
     // 默认值必须是当前可用的模型代码，否则新用户一选智谱就必失败。
     model:'glm-4-flash',
@@ -14460,6 +14495,91 @@ function aiAuthHeaders(){
     });
   }
   return headers;
+}
+// ============================================================
+// [AI 2026-11-04] 端点故障转移（多端点兜底）
+// ------------------------------------------------------------
+// 为什么需要：同一个服务商往往有多个入口域名，可用性并不同步。
+// 实例（2026-11-04 实测）：智谱国内站 bigmodel.cn / open.bigmodel.cn 的 OPTIONS 预检
+// 不再返回 access-control-allow-*，浏览器带 Authorization 必被判 CORS 失败（TypeError: Load failed）；
+// 而同一家的国际站 api.z.ai 预检头完整。只配一个端点的后果是「一个入口坏掉，整个功能全灭」。
+//
+// 边界必须说清：**跨平台/跨区域账号与 Key 不通用**（智谱国内站 vs z.ai 是两套账号）。
+// 所以本机制能救的是「同平台多入口」「某入口临时故障/限速/网关 5xx」，
+// 救不了「拿国内 Key 去调国际站」——那种情况会以 401 收场，并在最终错误里写清楚。
+const AI_DEAD_EP={};             // url → 恢复时间戳；纯内存，刷新页面即清空
+const AI_DEAD_TTL=5*60*1000;     // 失败端点冷藏 5 分钟：期间排到最后，避免每次先白等它一次
+function aiMarkDead(url){ if(url) AI_DEAD_EP[url]=Date.now()+AI_DEAD_TTL; }
+function aiMarkAlive(url){ if(url) delete AI_DEAD_EP[url]; }
+// 返回该服务商的端点列表，顺序 = 配置顺序；被冷藏的端点整体后移（不是删除，过期自动复活）
+function aiUrlsFor(provider){
+  const ep=AI_ENDPOINTS[provider];
+  if(!ep) return [];
+  const list=(Array.isArray(ep.urls)&&ep.urls.length)?ep.urls.slice():(ep.url?[ep.url]:[]);
+  const now=Date.now();
+  const alive=[], dead=[];
+  list.forEach(function(u){
+    if(AI_DEAD_EP[u] && AI_DEAD_EP[u]>now) dead.push(u); else alive.push(u);
+  });
+  return alive.concat(dead);
+}
+// 哪些 HTTP 状态码值得「换端点再试」：
+//   401/403 → Key 与这个端点的平台不匹配，换下一个（这是多端点最有价值的场景）
+//   404     → 该入口没有这个路径，换
+//   408/429 → 超时/限速，换
+//   5xx     → 网关或上游故障，换
+// 400/422 不换：那是参数或模型能力问题（max_tokens 超限、思考字段不支持、模型不存在），
+// 换端点只会把同一个错误再吃一遍，应当交给调用方自己的自愈链路处理。
+function aiShouldFailover(status){
+  return status===401 || status===403 || status===404 || status===408
+      || status===429 || status===500 || status===502 || status===503 || status===504;
+}
+function aiShortHost(url){
+  try{ return String(url).replace(/^https?:\/\//,'').split('/')[0]; }catch(e){ return String(url); }
+}
+// 取「当前最健康的端点」：坏端点被冷藏后会自动排到后面，这里只拿第一个。
+// 给那些不方便改成完整 failover 的历史调用点（英语解析/词典/聚类）用，
+// 保证主端点挂掉后它们也能自动落到备用端点上。
+function aiLiveUrl(provider){
+  const list=aiUrlsFor(provider);
+  if(list.length) return list[0];
+  const ep=AI_ENDPOINTS[provider];
+  return (ep && ep.url) || '';
+}
+// 流式/一次性 fetch 的多端点封装：返回 {resp, url}
+// 返回非 ok 的 resp 时说明「不该换端点」（400/422），由调用方按原逻辑自愈。
+async function aiFetchFailover(provider, options){
+  const urls=aiUrlsFor(provider);
+  if(!urls.length) throw new Error('未找到该服务商的可用端点');
+  const fails=[];
+  let lastErr=null;
+  for(let i=0;i<urls.length;i++){
+    const u=urls[i];
+    try{
+      const resp=await fetch(u, options);
+      if(resp && resp.ok){ aiMarkAlive(u); return {resp:resp, url:u}; }
+      const st=resp && resp.status;
+      if(aiShouldFailover(st) && i<urls.length-1){
+        aiMarkDead(u);
+        fails.push({url:u, msg:'HTTP '+st});
+        continue;
+      }
+      aiMarkAlive(u);
+      return {resp:resp, url:u};
+    }catch(e){
+      if(e && e.name==='AbortError') throw e;   // 主动中断（超时/用户取消），别再换个端点重来
+      aiMarkDead(u);
+      lastErr=e;
+      fails.push({url:u, msg:(e && (e.message || e.name)) || '网络错误'});
+    }
+  }
+  // 单端点服务商（除智谱外都是）：直接抛原始错误，报错文案与改动前**完全一致**，
+  // 不要裹成「所有端点均失败（1/1）…」，避免把别的模型的既有行为改掉。
+  if(urls.length===1 && lastErr) throw lastErr;
+  const detail=fails.map(function(f){ return aiShortHost(f.url)+' → '+f.msg; }).join('；');
+  const err=new Error('所有端点均失败（'+fails.length+'/'+urls.length+'）：'+detail);
+  err.endpointFails=fails;
+  throw err;
 }
 // 中转接口地址（部署后替换为真实地址；留空则直接走直连）
 const AI_PROXY_URL = 'https://你的中转接口地址';
@@ -14578,7 +14698,7 @@ async function requestAI(payload){
   };
 
   let token = Number(baseData.max_tokens) || 0;
-  for(let step = 0; step < 6; step++){
+  steps: for(let step = 0; step < 6; step++){
     baseData.max_tokens = token || undefined;
     // 1) 优先尝试中转
     if(proxyUsable){
@@ -14601,25 +14721,45 @@ async function requestAI(payload){
         console.log('[AI] 中转失败，已降级直连', e && (e.message || e));
       }
     }
-    // 2) 降级直连（需要 apiKey）
+    // 2) 降级直连（需要 apiKey）—— 多端点依次尝试，一个不通换下一个
+    // [AI 2026-11-04] 单端点时代：入口被 CORS 拦掉就整条链路死。现在按 AI_ENDPOINTS[provider].urls
+    // 顺序试，401/403/404/429/5xx 与网络错误都换下一个，只有 400/422 不换（参数问题换端点没用）。
     if(!aiConfig.apiKey) throw new Error('中转不可用且未配置 API Key，无法直连');
-    try{
-      return await axiosWithRetry({
-        method: 'post',
-        url: ep.url,
-        headers: aiAuthHeaders(),
-        data: baseData,
-        timeout: 90000,
-        proxy: false
-      });
-    }catch(e){
-      const lower = tokenLimitError(e) ? nextLowerToken(token) : 0;
-      if(lower){
-        token = lower;
-        console.log('[AI] max_tokens 超平台上限，直连降到 ' + token + ' 重试');
-        continue;
+    const directUrls = aiUrlsFor(provider);
+    const directFails = [];
+    for(let u = 0; u < directUrls.length; u++){
+      try{
+        const r = await axiosWithRetry({
+          method: 'post',
+          url: directUrls[u],
+          headers: aiAuthHeaders(),
+          data: baseData,
+          timeout: 90000,
+          proxy: false
+        });
+        aiMarkAlive(directUrls[u]);
+        return r;
+      }catch(e){
+        const lower = tokenLimitError(e) ? nextLowerToken(token) : 0;
+        if(lower){
+          token = lower;
+          console.log('[AI] max_tokens 超平台上限，直连降到 ' + token + ' 重试');
+          continue steps;   // 参数问题，不换端点，整轮重来
+        }
+        const st = e && e.response && e.response.status;
+        if(aiShouldFailover(st) && u < directUrls.length - 1){
+          aiMarkDead(directUrls[u]);
+          directFails.push(aiShortHost(directUrls[u]) + ' → HTTP ' + st);
+          console.log('[AI] 端点 ' + aiShortHost(directUrls[u]) + ' 返回 ' + st + '，换下一个端点重试');
+          continue;
+        }
+        throw e;
       }
-      throw e;
+    }
+    if(directFails.length){
+      const eAll = new Error('所有端点均失败：' + directFails.join('；'));
+      eAll.endpointFails = directFails;
+      throw eAll;
     }
   }
   throw new Error('max_tokens 已降到最低仍被平台拒绝，请检查模型是否可用');
@@ -15225,6 +15365,9 @@ async function simplifySolution(key, btn){
   let lastError=null;
   let thinkParamsStripped=false;   // 自愈标记：剔除过一次就不再重复剔除
   let mtLadderIdx=0;               // max_tokens 阶梯下探次数（见 MT_LADDER）
+  // [AI 2026-11-04] 最近一次成功的端点：续写（finish_reason=length 的第二轮）直接沿用它，
+  // 不用再从头把坏端点试一遍。初值取首选端点。
+  let activeUrl = ep.url;
 
   for(let attempt=0; attempt<=MAX_RETRY; attempt++){
     let fullText='';
@@ -15236,12 +15379,16 @@ async function simplifySolution(key, btn){
       const controller = new AbortController();
       const timeoutId = setTimeout(function(){ controller.abort(); }, 90000);
 
-      const resp=await fetch(ep.url,{
+      // [AI 2026-11-04] 多端点：一个入口被 CORS 拦 / 401 / 限速 / 5xx 就换下一个，
+      // 不再因为「某一家入口坏了」导致整个简化解析不可用。
+      const fo = await aiFetchFailover(aiConfig.provider, {
         method:'POST',
         headers: aiAuthHeaders(),
         body:JSON.stringify(body),
         signal: controller.signal
       });
+      const resp = fo.resp;
+      if(fo.url) activeUrl = fo.url;
 
       if(!resp.ok){
         clearTimeout(timeoutId);
@@ -15349,7 +15496,7 @@ async function simplifySolution(key, btn){
         if('reasoning' in contBody) contBody.reasoning={effort:'none'};
         if('enable_thinking' in contBody) contBody.enable_thinking=false;
         try{
-          const cResp=await fetch(ep.url,{method:'POST',headers:aiAuthHeaders(),body:JSON.stringify(contBody)});
+          const cResp=await fetch(activeUrl,{method:'POST',headers:aiAuthHeaders(),body:JSON.stringify(contBody)});
           if(!cResp.ok || !cResp.body) break;
           const cReader=cResp.body.getReader();
           const cDecoder=new TextDecoder('utf-8');
@@ -16404,23 +16551,50 @@ toggleBtn.onclick = function(e) {
 initProvinceFilter();
 
 // 省份筛选函数
-function initProvinceFilter() {
-  var sourceFilter = document.getElementById('sourceFilter');
-  var provinceFilter = document.getElementById('provinceFilter');
-  if (!sourceFilter || !provinceFilter) return;
-  
-  var allProvinces = [
-    '国考', '辽宁', '北京', '天津', '河北', '山西', '内蒙古',
+// [FEATURE 2026-11-04] 「省考」选项 = 除国考以外的地方考试题集合（聚合项，不是真实省份）。
+// 顺序固定：全部省份 → 国考（第一位）→ 省考（第二位）→ 各省份。
+// 列表抽成独立函数，是因为切到申论/面试再切回客观题时下拉会被别的分区重建，
+// 需要能幂等地把客观题列表（含省考）恢复回来 —— 见 ensureObjectiveProvinceOptions。
+// ⚠ 必须是**函数**而不是顶层 var 数组：initProvinceFilter() 的调用点在本段之上，
+//   var 只会声明提升、赋值不会，运行到那里时数组还是 undefined → .map 直接抛 TypeError，
+//   后果是下拉被清空成只剩「全部省份」、连 onchange 都没绑上。函数声明才真提升。
+function objectiveProvinceList(){
+  return [
+    '国考', '省考', '辽宁', '北京', '天津', '河北', '山西', '内蒙古',
     '吉林', '黑龙江', '上海', '江苏', '浙江', '安徽', '福建',
     '江西', '山东', '河南', '湖北', '湖南', '广东', '广西',
     '海南', '重庆', '四川', '贵州', '云南', '西藏', '陕西',
     '甘肃', '青海', '宁夏', '新疆', '深圳'
   ];
-  
-  provinceFilter.innerHTML = '<option value="all">全部省份</option>';
-  allProvinces.forEach(function(province) {
-    provinceFilter.innerHTML += '<option value="' + province + '">' + province + '</option>';
-  });
+}
+function buildObjectiveProvinceOptions(select){
+  if(!select) return;
+  select.innerHTML = '<option value="all">全部省份</option>' + objectiveProvinceList().map(function(province){
+    return '<option value="' + province + '">' + province + '</option>';
+  }).join('');
+}
+// 幂等修复：只在「下拉里没有国考选项」（已被申论/面试重建过）或「缺省考」时才重建。
+// 正常情况下什么都不做 —— 不影响既有的省份选择与事件绑定。
+function ensureObjectiveProvinceOptions(){
+  var select = document.getElementById('provinceFilter');
+  if(!select) return;
+  var hasGk = false, hasSk = false;
+  for(var i=0;i<select.options.length;i++){
+    var v = select.options[i].value;
+    if(v==='国考') hasGk = true;
+    if(v==='省考') hasSk = true;
+  }
+  if(hasGk && hasSk) return;
+  var keep = filterState.province || 'all';
+  buildObjectiveProvinceOptions(select);
+  setSelectValue(select, keep);
+}
+function initProvinceFilter() {
+  var sourceFilter = document.getElementById('sourceFilter');
+  var provinceFilter = document.getElementById('provinceFilter');
+  if (!sourceFilter || !provinceFilter) return;
+
+  buildObjectiveProvinceOptions(provinceFilter);
   
   provinceFilter.onchange = function() {
     var selected = this.value;
@@ -17309,7 +17483,7 @@ if (window.renderQuestions) window.renderQuestions();
   </select>
   <label>API Key</label>
   <input type="password" id="aiKey" placeholder="sk-...">
-  <div style="font-size:11px;color:#64748b;line-height:1.5;margin-top:-2px;">走中转模式时无需填写，留空即可；中转失败时会自动降级到直连，此时才需要填。</div>
+  <div style="font-size:11px;color:#64748b;line-height:1.5;margin-top:-2px;">走中转模式时无需填写，留空即可；中转失败时会自动降级到直连，此时才需要填。<br>同一服务商有多个入口时会依次尝试（如智谱：bigmodel.cn → open.bigmodel.cn → api.z.ai），全部失败会在报错里列出每个入口的原因。注意智谱国内站与 z.ai 是两套账号，Key 不通用。</div>
   <label>模型（可选，留空用默认）</label>
   <input type="text" id="aiModel" placeholder="留空用默认；可填 gemini-3.8-flash / glm-4-flash / Qwen/Qwen2.5-7B-Instruct …">
   <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#2d3748;padding:4px 0;cursor:pointer;">
@@ -23840,12 +24014,17 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       max_tokens: 900,                 // 250~350 字中文够用；额度小一点也能少等一点
       stream: true
     };
-    return fetch(ep.url, {
+    // [AI 2026-11-04] 多端点：同 simplifySolution，一个入口不通就换下一个
+    var fetchOpts = {
       method:'POST',
       headers: (typeof aiAuthHeaders === 'function') ? aiAuthHeaders() : {'Content-Type':'application/json'},
       body: JSON.stringify(body),
       signal: signal
-    }).then(function(resp){
+    };
+    var req = (typeof aiFetchFailover === 'function')
+      ? aiFetchFailover(provider, fetchOpts).then(function(fo){ return fo.resp; })
+      : fetch(ep.url, fetchOpts);
+    return req.then(function(resp){
       if(!resp || !resp.ok) throw new Error('HTTP ' + ((resp && resp.status) || '?'));
       if(!resp.body || typeof resp.body.getReader !== 'function') throw new Error('该服务不支持流式返回');
       var reader = resp.body.getReader();
