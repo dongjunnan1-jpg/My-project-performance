@@ -3396,6 +3396,11 @@ body.skin-dark .en-pagination button.active {
         </select>
         <input type="file" id="fileInput" accept=".json" multiple style="display:none;">
         <button type="button" id="uploadButton" class="btn btn-outline">上传</button>
+        <!-- [FIX 2026-11-05] 「文件」开关原先由 body 末尾的脚本 createElement 后 insert，
+             脚本跑完之前首帧没有这个按钮，刷新时会看到「上传」旁边空一格（短则几十 ms，
+             大文件/慢网络下可到数百 ms）。这里直接静态写出，脚本改为复用（见下方 IIFE），
+             保证首帧就是 4 个控件。内联样式与脚本原样一致，避免两处外观漂移。 -->
+        <button type="button" id="fileToggleBtn" style="padding:1px 3px;font-size:10px;border-radius:4px;cursor:pointer;border:1px solid #ccc;background:#fff;min-height:20px;color:var(--deep);">文件</button>
     </div>
 
     <!-- 文件列表（标签页形式） -->
@@ -16638,10 +16643,17 @@ if (window.innerWidth <= 768) {
     var selectBtn = document.querySelector('.upload-zone .btn-primary, .upload-zone button');
     
     if (fileList && selectBtn) {
-        var toggleBtn = document.createElement('button');
-        toggleBtn.textContent = '文件';
-        toggleBtn.style.cssText = 'padding:1px 3px;font-size:10px;border-radius:4px;cursor:pointer;border:1px solid #ccc;background:#fff;min-height:20px;color:var(--deep);';   /* [FIX 20261001c] 文字色与同区 select 统一 */
-        toggleBtn.type = 'button';
+        /* [FIX 2026-11-05] 按钮已在 HTML 里静态写好（#fileToggleBtn），这里只复用 + 绑事件。
+           只有老页面/被别的流程清掉时才走 createElement 兜底，避免出现两个「文件」按钮。 */
+        var toggleBtn = document.getElementById('fileToggleBtn');
+        if (!toggleBtn) {
+            toggleBtn = document.createElement('button');
+            toggleBtn.id = 'fileToggleBtn';
+            toggleBtn.textContent = '文件';
+            toggleBtn.style.cssText = 'padding:1px 3px;font-size:10px;border-radius:4px;cursor:pointer;border:1px solid #ccc;background:#fff;min-height:20px;color:var(--deep);';   /* [FIX 20261001c] 文字色与同区 select 统一 */
+            toggleBtn.type = 'button';
+            selectBtn.after(toggleBtn);
+        }
 toggleBtn.onclick = function(e) {
     e.preventDefault();
     e.stopPropagation();
@@ -16655,7 +16667,6 @@ toggleBtn.onclick = function(e) {
     return false;
 };
         
-        selectBtn.after(toggleBtn);
         fileList.style.display = 'none';
     }
 })();
