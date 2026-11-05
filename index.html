@@ -20974,6 +20974,14 @@ function mlMirrorRemove(id){
 
 function mlLoadAll(){
   return Promise.resolve()
+    /* [FIX 20261106b] idbGetByPrefix 在 _db 为空时直接返回 []（不报错）。
+       页面刚启动就点开素材库时，idbOpen 可能还没结束，于是读出来是空的。
+       这里先确保库已打开；打不开也无所谓，下面有镜像兜底。 */
+    .then(function(){
+      if(typeof _db === 'undefined' || !_db){
+        return idbOpen().catch(function(e){ console.warn('[素材库] 打开数据库失败', e); });
+      }
+    })
     .then(function(){ return idbGetByPrefix(ML_PREFIX); })
     .then(function(list){
       var byId = Object.create(null), out = [];
@@ -21049,7 +21057,12 @@ async function materialRefresh(){
   mlState.loadError = '';
   renderMaterialLibrary();
   try{
-    mlState.items = await mlLoadAll();
+    /* [FIX 20261106b] 加 6 秒读库超时：iOS 上 IndexedDB 偶发卡住不回调，
+       界面就会永远停在「正在读取素材…」，看起来比「空的」更像是坏了。
+       超时先用本地镜像顶上，不再死等。 */
+    var timeout = new Promise(function(res){ setTimeout(function(){ res('__TIMEOUT__'); }, 6000); });
+    var got = await Promise.race([ mlLoadAll(), timeout ]);
+    mlState.items = (got === '__TIMEOUT__') ? mlMirrorRead() : got;
   }catch(e){
     mlState.items = [];
     mlState.loadError = (e && (e.message || String(e))) || '读取失败';
@@ -21384,11 +21397,66 @@ function mlEnsureModal(){
   ov.innerHTML = '<div id="mlModalBox"></div>';
   ov.addEventListener('click', function(e){ if(e.target === ov) mlCloseModal(); });
   document.body.appendChild(ov);
+  mlBindViewportFit();
   return ov;
 }
-function mlCloseModal(){
+
+/* [FIX 20261106b] iPhone Safari 上软键盘会把「💾 保存」按钮整块盖住。
+   原因：Safari 的 vh 不随键盘变化，弹窗按 88vh 排好后并没有变矮；
+   实测 iPhone 14（390×844）弹窗高 593、保存按钮底边 709，而键盘上方只剩 508
+   → 保存按钮被盖 201px，根本点不到。用户只能点空白处关窗，素材就白填了。
+   做法：用 visualViewport 把遮罩压到键盘上方的可视区里，弹窗高度 = 可视高 - 44。 */
+function mlFitViewport(){
   var ov = document.getElementById('mlModalOverlay');
-  if(ov) ov.classList.remove('show');
+  if(!ov || !ov.classList.contains('show')) return;
+  var vv = window.visualViewport;
+  var h = (vv && vv.height) ? vv.height : window.innerHeight;
+  var box = document.getElementById('mlModalBox');
+  /* 只有「可视区明显比布局视口小」才动手 —— 那就是键盘。
+     桌面浏览器、Android（布局视口跟着缩）下这里都不会触发，弹窗仍用原来的 88vh。 */
+  if(!(h < window.innerHeight - 60)){
+    ov.style.top = ''; ov.style.height = ''; ov.style.bottom = ''; ov.style.overflow = '';
+    if(box) box.style.removeProperty('max-height');
+    return;
+  }
+  /* 只压垂直方向：横向用视觉视口宽度会把桌面滚动条那 15px 露出来 */
+  ov.style.top = ((vv && vv.offsetTop) || 0) + 'px';
+  ov.style.height = h + 'px';
+  ov.style.bottom = 'auto';
+  ov.style.overflow = 'hidden';
+  /* 必须带 important：样式表里 #mlModalBox 写的是 max-height:88vh !important，
+     普通内联样式打不过它，弹窗高度压根不会跟着缩。 */
+  if(box) box.style.setProperty('max-height', Math.max(200, Math.round(h - 44)) + 'px', 'important');
+}
+function mlBindViewportFit(){
+  if(window.__mlVvBound) return;
+  window.__mlVvBound = true;
+  window.addEventListener('resize', mlFitViewport);
+  window.addEventListener('orientationchange', function(){ setTimeout(mlFitViewport, 260); });
+  if(window.visualViewport){
+    window.visualViewport.addEventListener('resize', mlFitViewport);
+    window.visualViewport.addEventListener('scroll', mlFitViewport);
+  }
+  document.addEventListener('focusin', function(){
+    setTimeout(mlFitViewport, 80);
+    setTimeout(mlFitViewport, 360);
+  });
+}
+/* 弹窗关闭保护：填了内容但没保存就关（点空白 / 点 ✕ / 按取消）时问一句，
+   避免用户以为存进去了、其实什么都没落库 —— 这正是「加了看不到」最伤的一种。 */
+var mlQuickGuard = { active:false, saved:false };
+function mlCloseModal(force){
+  var ov = document.getElementById('mlModalOverlay');
+  if(!force && mlQuickGuard.active && !mlQuickGuard.saved){
+    var ta = document.getElementById('mlqContent');
+    if(ta && String(ta.value||'').trim()){
+      var ok = true;
+      try{ ok = window.confirm('这条素材还没有保存，直接关闭就会丢失。\n\n确定关闭吗？'); }catch(e){ ok = true; }
+      if(!ok) return;
+    }
+  }
+  mlQuickGuard.active = false;
+  if(ov){ ov.classList.remove('show'); ov.removeAttribute('style'); }
   var box = document.getElementById('mlModalBox');
   if(box) box.innerHTML = '';
 }
@@ -21410,6 +21478,8 @@ function mlSourceOfQuestion(qEl){
 function mlOpenQuickSave(text, questionEl){
   var ov = mlEnsureModal();
   var box = document.getElementById('mlModalBox');
+  mlQuickGuard.active = true;
+  mlQuickGuard.saved = false;
   var src = mlSourceOfQuestion(questionEl);
   var autoTitle = String(text).replace(/\s+/g,' ').slice(0, 24);
   var catOpts = MATERIAL_CATEGORIES.map(function(c){
@@ -21489,14 +21559,19 @@ function mlOpenQuickSave(text, questionEl){
       if(!had) mlState.items.unshift(m);
       mlState.items.sort(function(a,b){ return (b.updatedAt||0) - (a.updatedAt||0); });
     }catch(e){}
-    mlCloseModal();
-    mlToast(mode === 'idb' ? '✅ 已加入素材库' : '✅ 已保存（兼容模式：写入本地存储）');
+    mlQuickGuard.saved = true;
+    mlCloseModal(true);
+    /* 手机上顶部 toast 容易被忽略，这里把标题也带上，让用户当场确认「进去了」 */
+    mlToast(mode === 'idb'
+      ? '✅ 已加入素材库：' + (m.title || '未命名').slice(0, 12)
+      : '✅ 已保存（兼容模式）：' + (m.title || '未命名').slice(0, 12));
     if(document.getElementById('toolFullscreen').style.display === 'block'){
       await materialRefresh();
     }
   });
 
   ov.classList.add('show');
+  mlFitViewport();
   /* [FIX 20261106] 触屏设备不再自动聚焦标题。
      手机上自动 focus 会立刻弹出软键盘，弹窗底部（取消/保存）被键盘顶出可视区，
      点「保存」实际点不到 —— 表现为「点了没反应 / 素材没进库」。 */
