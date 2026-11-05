@@ -1229,10 +1229,13 @@ body.skin-dark .search-float-counter { color:#a0aec0; }
   max-width: 100%; box-sizing: border-box; overflow-x: auto;
 }
 /* 图片放大查看（点题干 / 材料 / 参考答案 / 解析里的图片）：手机屏窄，思维导图缩到 100% 会小到看不清，
-   所以给一个按原始尺寸、可上下左右拖动的全屏视图。 */
+   所以给一个按原始尺寸、可上下左右拖动的全屏视图。
+   [FIX 2026-11-05 b] 第一版用 display:block + margin:0 auto，图片比屏幕矮时会被钉在屏幕最顶端，
+   看起来像"页面跳到了顶部"。改用 flex + margin:auto：图比屏幕小→上下左右都居中；图比屏幕大→
+   自动退回可滚动布局，两轴都能拖，且不会被 align-items:center 裁掉顶部。 */
 #imgZoom { position: fixed; inset: 0; z-index: 100020; background: rgba(15,23,42,.94); display: none; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 8px; box-sizing: border-box; }
-#imgZoom.show { display: block; }
-#imgZoom img { display: block; margin: 0 auto; max-width: none !important; width: auto; height: auto; background: #fff; }
+#imgZoom.show { display: flex; }
+#imgZoom img { display: block; margin: auto; flex: 0 0 auto; max-width: none !important; width: auto; height: auto; background: #fff; }
 #imgZoom .img-zoom-tip { position: fixed; left: 0; right: 0; bottom: calc(10px + env(safe-area-inset-bottom)); text-align: center; color: #e2e8f0; font-size: 13px; pointer-events: none; text-shadow: 0 1px 4px rgba(0,0,0,.9); }
 /* 自定义确认弹窗（替代原生 confirm）：iOS“添加到主屏幕”独立模式 / 部分 App 内置浏览器会静默禁用
    confirm()/alert()，导致删除文件、清空分区、重置进度、导入备份等依赖 confirm 的操作点不动（函数直接 return）。
@@ -9714,16 +9717,24 @@ function ensureImgZoom(){
 function openImgZoom(src){
   if(!src) return;
   var ov=ensureImgZoom();
-  ov.querySelector('img').src=src;
+  var im=ov.querySelector('img');
+  im.src=src;
   ov.classList.add('show');
   ov.scrollTop=0; ov.scrollLeft=0;
-  document.documentElement.style.overflow='hidden';
+  // 图比屏幕宽时，首屏横向居中，避免一进来只看到左边一块
+  im.onload=function(){
+    if(!ov.classList.contains('show')) return;
+    if(im.offsetWidth > ov.clientWidth) ov.scrollLeft=(im.offsetWidth-ov.clientWidth)/2;
+  };
+  // 注意：不要动 documentElement / body 的 overflow。
+  // iOS Safari 上在已滚动页面里把 html 设成 overflow:hidden，会伴随一次滚动位置跳变，
+  // 表现为「点开图之后页面回到顶部」。改为只给遮罩层 overscroll-behavior:contain，
+  // 手指在遮罩内滑动不会把滚动传递给背后页面。
 }
 function closeImgZoom(){
   if(!_imgZoomEl || !_imgZoomEl.classList.contains('show')) return;
   _imgZoomEl.classList.remove('show');
   _imgZoomEl.querySelector('img').removeAttribute('src');
-  document.documentElement.style.overflow='';
 }
 document.addEventListener('click', function(e){
   var t=e.target;
