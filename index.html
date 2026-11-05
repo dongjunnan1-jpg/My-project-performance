@@ -20933,29 +20933,80 @@ var mlState = {
   category: 'all',
   currentId: null,
   busy: false,
-  busyText: ''
+  busyText: '',
+  loading: false,          /* [FIX 20261106] 读取中：列表区显示进度而不是「素材库还是空的」 */
+  loadError: ''
 };
 
-async function mlLoadAll(){
+/* [FIX 20261106] 素材库本地镜像。
+   背景：素材只存 IndexedDB。只要 idbGetByPrefix 这一次读被系统回收/被别的事务卡住，
+        mlLoadAll 就会返回空数组，界面显示「素材库还是空的」——用户看到的就是「刚存的没了」。
+   做法：写入时同步在 localStorage 留一份（按 id 合并、上限 300 条 / 2.5MB），
+        读取时以 IndexedDB 为准、镜像只补 IDB 里缺的 id。 */
+var ML_LS_KEY = 'material_bank_v1';
+function mlMirrorRead(){
   try{
-    var list = await idbGetByPrefix(ML_PREFIX);
-    list = (list || []).filter(function(x){ return x && x.id && x.content; });
-    list.sort(function(a,b){ return (b.updatedAt||0) - (a.updatedAt||0); });
-    return list;
-  }catch(e){ console.warn('[素材库] 读取失败', e); return []; }
+    var raw = localStorage.getItem(ML_LS_KEY);
+    if(!raw) return [];
+    var arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter(function(x){ return x && x.id && x.content; }) : [];
+  }catch(e){ return []; }
+}
+function mlMirrorWrite(items){
+  try{
+    var json = JSON.stringify((items||[]).slice(0,300));
+    if(json.length > 2500000) return false;   /* 超 2.5MB 不写，避免撑爆 quota 把镜像弄坏 */
+    localStorage.setItem(ML_LS_KEY, json);
+    return true;
+  }catch(e){ return false; }
+}
+function mlMirrorUpsert(m){
+  var arr = mlMirrorRead();
+  var hit = false;
+  for(var i=0;i<arr.length;i++){ if(arr[i].id === m.id){ arr[i] = m; hit = true; break; } }
+  if(!hit) arr.unshift(m);
+  arr.sort(function(a,b){ return (b.updatedAt||0) - (a.updatedAt||0); });
+  return mlMirrorWrite(arr);
+}
+function mlMirrorRemove(id){
+  return mlMirrorWrite(mlMirrorRead().filter(function(x){ return x.id !== id; }));
+}
+
+function mlLoadAll(){
+  return Promise.resolve()
+    .then(function(){ return idbGetByPrefix(ML_PREFIX); })
+    .then(function(list){
+      var byId = Object.create(null), out = [];
+      (list || []).forEach(function(x){
+        if(x && x.id && x.content){ byId[x.id] = x; out.push(x); }
+      });
+      mlMirrorRead().forEach(function(x){ if(!byId[x.id]) out.push(x); });   /* 镜像补缺 */
+      out.sort(function(a,b){ return (b.updatedAt||0) - (a.updatedAt||0); });
+      if(out.length !== (list || []).length) mlMirrorWrite(out);             /* 顺手修好镜像 */
+      return out;
+    })
+    .catch(function(e){
+      console.warn('[素材库] IndexedDB 读取失败，改用本地镜像', e);
+      var mirror = mlMirrorRead();
+      if(!mirror.length) throw e;                                          /* 镜像也空 → 真失败，交给界面报错 */
+      return mirror;
+    });
 }
 function mlSaveOne(m){
   // 确保 IndexedDB 已打开：idbSet 在 _db 为空时会静默返回 false，
   // 导致"提示保存成功但实际没写入"。这里先补开，再写入并校验。
+  // [FIX 20261106] 无论 IDB 成败，都先落一份本地镜像；返回 'idb' / 'mirror'。
   return Promise.resolve()
     .then(function(){ if(typeof _db === 'undefined' || !_db){ return idbOpen(); } })
     .then(function(){ return idbSet(ML_PREFIX + m.id, m); })
+    .then(function(ok){ return ok === true; }, function(){ return false; })
     .then(function(ok){
-      if(!ok){ throw new Error('IndexedDB 写入失败（数据库不可用）'); }
-      return true;
+      var mirrored = mlMirrorUpsert(m);
+      if(!ok && !mirrored){ throw new Error('IndexedDB 与本地存储均写入失败'); }
+      return ok ? 'idb' : 'mirror';
     });
 }
-function mlDeleteOne(id){ return idbDel(ML_PREFIX + id); }
+function mlDeleteOne(id){ return idbDel(ML_PREFIX + id).then(function(ok){ mlMirrorRemove(id); return ok; }); }
 function mlNewId(){ return 'm_' + Date.now() + '_' + Math.random().toString(36).slice(2,7); }
 
 function mlFiltered(){
@@ -20991,7 +21042,21 @@ async function materialOpen(){
   await materialRefresh();
 }
 async function materialRefresh(){
-  mlState.items = await mlLoadAll();
+  /* [FIX 20261106] 先渲染骨架再读库。
+     原来是一路 await 到 idbGetByPrefix 返回才第一次画界面，慢盘/大库时打开素材库
+     会有明显白屏（实测 0.5～2 秒），看起来就是「素材库空的」。 */
+  mlState.loading = true;
+  mlState.loadError = '';
+  renderMaterialLibrary();
+  try{
+    mlState.items = await mlLoadAll();
+  }catch(e){
+    mlState.items = [];
+    mlState.loadError = (e && (e.message || String(e))) || '读取失败';
+    console.warn('[素材库] 读取失败', e);
+  }finally{
+    mlState.loading = false;
+  }
   renderMaterialLibrary();
 }
 
@@ -21033,9 +21098,18 @@ function renderMaterialLibrary(){
   }
 
   if(!items.length){
-    html += '<div class="ml-panel ml-empty"><span class="big">📚</span>'
-          + (mlState.items.length ? '没有匹配的素材' : '素材库还是空的<br><br>在申论 / 综应 / 面试分区选中文字即可加入，<br>或点上方「➕ 手动添加」')
-          + '</div>';
+    if(mlState.loading){
+      /* [FIX 20261106] 读取中：明确显示「正在读取」，不要用空态文案误导成「素材没了」 */
+      html += '<div class="ml-panel ml-empty"><span class="big">⏳</span>正在读取素材…</div>';
+    }else if(mlState.loadError){
+      html += '<div class="ml-panel ml-empty"><span class="big">⚠️</span>读取素材失败：'
+            + escapeHtml(mlState.loadError)
+            + '<br><br><button class="btn btn-outline" type="button" onclick="mlReload()">重试</button></div>';
+    }else{
+      html += '<div class="ml-panel ml-empty"><span class="big">📚</span>'
+            + (mlState.items.length ? '没有匹配的素材' : '素材库还是空的<br><br>在申论 / 综应 / 面试分区选中文字即可加入，<br>或点上方「➕ 手动添加」')
+            + '</div>';
+    }
   }else{
     html += '<div class="ml-list">';
     items.forEach(function(m){
@@ -21200,6 +21274,7 @@ function mlBindEdit(){
   });
 }
 
+window.mlReload = function(){ materialOpen().catch(function(e){ console.warn('[素材库] 重试失败', e); }); };
 window.mlBackToList = function(){ mlState.view = 'list'; mlState.currentId = null; renderMaterialLibrary(); };
 window.mlAddNew = function(){ mlState.currentId = null; mlState.view = 'edit'; renderMaterialLibrary(); };
 window.mlView = function(id){ mlState.currentId = id; mlState.view = 'detail'; renderMaterialLibrary(); };
@@ -21371,7 +21446,9 @@ function mlOpenQuickSave(text, questionEl){
     +   '</div>'
     + '</div>';
 
-  document.getElementById('mlqSave').addEventListener('click', async function(){
+  var mlqSaveBtn = document.getElementById('mlqSave');
+  mlqSaveBtn.addEventListener('click', async function(){
+    if(mlqSaveBtn.disabled) return;
     var content = (document.getElementById('mlqContent').value || '').trim();
     if(!content){ alert('素材内容不能为空'); return; }
     var tagsRaw = (document.getElementById('mlqTags').value || '').trim();
@@ -21387,31 +21464,50 @@ function mlOpenQuickSave(text, questionEl){
       core: '', structure: '', angles: [],
       createdAt: now, updatedAt: now
     };
-    // 保存前确保 IndexedDB 已打开（否则 idbSet 会静默返回 false）
-    try{ if(typeof _db === 'undefined' || !_db){ await idbOpen(); } }catch(e){}
-    var ok = false;
-    try{ ok = await mlSaveOne(m); }catch(e){ console.error('[素材库] 保存异常', e); ok = false; }
-    // 回读校验：确认真的写进去了
-    var verify = null;
-    try{ verify = await idbGet(ML_PREFIX + m.id); }catch(e){}
-    if(!ok || !verify){
-      // 保存失败：不要谎报成功
-      console.error('[素材库] 保存失败', { ok: ok, verify: verify, dbOpen: !!_db });
-      alert('❌ 保存失败：本地数据库不可用。\n\n请检查浏览器是否禁用了 IndexedDB（无痕/隐私模式），或尝试刷新页面后重试。');
+    /* [FIX 20261106] 保存中锁按钮 + 8 秒超时。
+       原来这里 await mlSaveOne 再 await idbGet 回读，任何一步被系统挂住，
+       按钮就一直「没反应」、弹窗不关，用户只能关掉窗口 —— 素材看着像没存进去。 */
+    var oldLabel = mlqSaveBtn.textContent;
+    mlqSaveBtn.disabled = true;
+    mlqSaveBtn.textContent = '保存中…';
+    var mode = '', saveErr = null;
+    try{
+      mode = await Promise.race([
+        mlSaveOne(m),
+        new Promise(function(_, rej){ setTimeout(function(){ rej(new Error('写入超时（8 秒）')); }, 8000); })
+      ]);
+    }catch(e){ saveErr = e; console.error('[素材库] 保存异常', e); }
+    if(!mode){
+      mlqSaveBtn.disabled = false;
+      mlqSaveBtn.textContent = oldLabel;
+      alert('❌ 保存失败：' + ((saveErr && (saveErr.message || saveErr)) || '本地存储不可用') + '\n\n请刷新页面后重试。');
       return;
     }
+    /* 先让内存列表带上这条，界面立刻可见，不依赖下一次读库 */
+    try{
+      var had = mlState.items.some(function(x){ return x.id === m.id; });
+      if(!had) mlState.items.unshift(m);
+      mlState.items.sort(function(a,b){ return (b.updatedAt||0) - (a.updatedAt||0); });
+    }catch(e){}
     mlCloseModal();
-    mlToast('✅ 已加入素材库');
+    mlToast(mode === 'idb' ? '✅ 已加入素材库' : '✅ 已保存（兼容模式：写入本地存储）');
     if(document.getElementById('toolFullscreen').style.display === 'block'){
       await materialRefresh();
     }
   });
 
   ov.classList.add('show');
-  setTimeout(function(){
-    var t = document.getElementById('mlqTitle');
-    if(t) t.focus();
-  }, 50);
+  /* [FIX 20261106] 触屏设备不再自动聚焦标题。
+     手机上自动 focus 会立刻弹出软键盘，弹窗底部（取消/保存）被键盘顶出可视区，
+     点「保存」实际点不到 —— 表现为「点了没反应 / 素材没进库」。 */
+  var coarse = false;
+  try{ coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches; }catch(e){}
+  if(!coarse){
+    setTimeout(function(){
+      var t = document.getElementById('mlqTitle');
+      if(t) t.focus();
+    }, 50);
+  }
 }
 
 function mlToast(msg){
@@ -21668,10 +21764,39 @@ window.mlImport = async function(input){
 (function installMaterialEntry(){
   if(typeof window.openToolFullscreen !== 'function') return;
   var _orig = window.openToolFullscreen;
+  /* [FIX 20261106] 素材库是唯一「自己接管窗口」的工具：它直接写 window.openToolFullscreen，
+     绕过了下游的 news-scrollfix 包装器，所以 body 永远拿不到 .tool-fs-open。
+     而真正锁住背景滚动的就是 body.tool-fs-open（position:fixed + overflow:hidden !important）；
+     只写 document.body.style.overflow='hidden' 没用 —— html 带 overflow-x:hidden，
+     页面滚动容器是 html，body 的 overflow 不参与视口滚动，于是「开着素材库还能滑题目」。 */
+  var _savedY = null;
+  function lockPage(){
+    if(_savedY !== null) return;
+    _savedY = (typeof window.scrollY === 'number') ? window.scrollY : (document.documentElement.scrollTop || 0);
+    document.body.classList.add('tool-fs-open');
+  }
+  function unlockPage(){
+    document.body.classList.remove('tool-fs-open');
+    if(_savedY === null) return;
+    var y = _savedY; _savedY = null;
+    try{ window.scrollTo({top:y, left:0, behavior:'instant'}); }catch(e){ window.scrollTo(0, y); }
+    setTimeout(function(){
+      try{ window.scrollTo({top:y, left:0, behavior:'instant'}); }catch(e){ window.scrollTo(0, y); }
+    }, 0);
+  }
+  var _closeOrig = window.closeToolFullscreen;
+  if(typeof _closeOrig === 'function'){
+    window.closeToolFullscreen = function(){
+      var r = _closeOrig.apply(this, arguments);
+      if(_savedY !== null) unlockPage();
+      return r;
+    };
+  }
   window.openToolFullscreen = function(k){
     if(k === 'material'){
       var box = document.getElementById('toolFullscreen');
       if(!box) return;
+      lockPage();
       box.style.display = 'block';
       document.body.style.overflow = 'hidden';
       var titleEl = document.getElementById('toolFullscreenTitle');
