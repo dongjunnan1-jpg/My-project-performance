@@ -987,6 +987,45 @@ body.ms-zone.pc-mode .filter-bar .sf-multi { display: none !important; }
   body.ms-zone .filter-bar button[onclick*="clearFilters"] .sf-clear-ico { display: none !important; }
 }
 
+/* ===== [FEATURE 2026-11-06] 年份多选面板 =====
+   交互设计：#yearFilter 仍是原生 <select>（九宫格布局、各分区 padding/字号规则全部沿用，
+   零布局风险），只把「点击」改成打开下面的复选面板。select 的第 1 项（value=all）
+   文本被 JS 改写为「当前选择摘要」，所以外观和原来完全一样。 */
+#yearFilter { cursor: pointer; pointer-events: none; }
+/* 原生 select 设为 pointer-events:none，点击会穿透到 .filter-bar，
+   由下面的 JS 按坐标判定 —— 这样 iOS/Android 的原生选择器绝不会弹出来。
+   select 本身仍照常渲染、照常被 JS 赋值，布局/外观零改动。 */
+#qfPanel {
+  position: fixed; z-index: 100060; display: none; box-sizing: border-box;
+  min-width: 200px; max-width: 300px; overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: var(--surface, #fff); border: 1px solid var(--border, #dbe7f5);
+  border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.18); padding: 6px;
+}
+#qfPanel.open { display: block; }
+#qfPanel .qf-head { display: flex; gap: 6px; padding: 4px 4px 8px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--light, #eef2f7); }
+#qfPanel .qf-head button { flex: 1 1 0; min-height: 32px; font-size: 12px; font-family: inherit;
+  border: 1px solid var(--border, #dbe7f5); background: var(--surface, #fff); color: var(--deep);
+  border-radius: 7px; cursor: pointer; }
+#qfPanel .qf-opt { display: flex; align-items: center; gap: 8px; padding: 10px;
+  border-radius: 7px; font-size: 13.5px; color: var(--text, #2d3748);
+  cursor: pointer; user-select: none; -webkit-user-select: none; }
+#qfPanel .qf-opt:hover { background: var(--light, #eef4fc); }
+#qfPanel .qf-opt.selected { background: var(--light, #eef4fc); color: var(--deep); font-weight: 700; }
+#qfPanel .qf-opt::before { content: ''; display: inline-block; width: 16px; flex: 0 0 16px;
+  text-align: center; font-weight: 700; color: var(--main, #5b9bd5); }
+#qfPanel .qf-opt.selected::before { content: '✓'; }
+#qfPanel .qf-cnt { margin-left: auto; font-size: 11.5px; font-weight: 400;
+  color: var(--text-muted, #5a6b80); white-space: nowrap; }
+#qfPanel .qf-empty { padding: 14px 10px; font-size: 12.5px;
+  color: var(--text-muted, #5a6b80); text-align: center; }
+body.skin-dark #qfPanel { background: var(--surface, #1c2333); border-color: var(--border, #52627a); }
+body.skin-dark #qfPanel .qf-opt { color: var(--text, #e6edf5); }
+body.skin-dark #qfPanel .qf-opt:hover { background: rgba(255,255,255,.08); }
+body.skin-dark #qfPanel .qf-head button { background: var(--surface, #1c2333);
+  border-color: var(--border, #52627a); color: var(--text, #e6edf5); }
+
 /* ===== [FIX 20260930] 排序 + 正确率区间 多选下拉面板 ===== */
 #sortFilter { display: none !important; }   /* 原下拉隐藏，由自定义面板接管 */
 .sf-multi { position: relative; display: block; width: 100%; min-width: 0; max-width: 100%; }
@@ -8561,17 +8600,49 @@ function getModuleStatsForBar(){
   _moduleStatsMemo.sig = sig; _moduleStatsMemo.stats = stats;
   return Object.assign({}, stats);
 }
+/* ===== [FEATURE 2026-11-06] 年份筛选支持多选 =====
+   数据模型：filterState.year 仍是字符串，但允许「逗号分隔的年份集合」：
+     'all'             → 不筛选
+     '2024'            → 单选（老视图/老备份完全兼容）
+     '2024,2025'       → 多选
+     '__none__'        → 「未标注年份」桶，可与其它年份共存，如 '2024,__none__'
+   所有筛选点一律走 yearSelList() / yearSelHas()，**不要**再直接与 filterState.year 做相等比较。 */
+function yearSelList(){
+  var v = String(filterState.year==null ? 'all' : filterState.year);
+  if(!v || v==='all') return null;                 /* null = 不筛选 */
+  var arr = v.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+  return arr.length ? arr : null;
+}
+function yearSelHas(list, tok){
+  return !!list && list.indexOf(String(tok)) >= 0;
+}
+function yearSelText(){
+  var l = yearSelList();
+  if(!l) return '全部年份';
+  var names = l.map(function(t){ return t==='__none__' ? '未标注' : t; });
+  if(names.length === 1) return names[0] + '年';
+  if(names.length === 2) return names[0] + '/' + names[1];   /* 窄格显示得下 */
+  return '已选' + names.length + '个年份';
+}
 function getFilterBaseQuestions(){
   var sig = filterBaseSignature();
   if(_gfbMemo.sig === sig && _gfbMemo.arr) return _gfbMemo.arr.slice();
   let qs=getZoneQuestions(activeZone, '__all__');
   const kw=normalizeSearchText(filterState.search);
   if(kw) qs=qs.filter(function(q){ return getZoneSearchText(q).indexOf(kw)>=0; });
-  if(filterState.year && filterState.year!=='all'){
+  var _yl = yearSelList();
+  if(_yl){
     qs=qs.filter(function(q){
-      if(activeZone==='sl'||activeZone==='zy') return (q._paperYear||q.year)===filterState.year;
-      if(filterState.year==='__none__') return qzYears(q)==='';   // 「未标注年份」桶
-      return qzYears(q).indexOf('|'+filterState.year+'年')>=0;
+      if(activeZone==='sl'||activeZone==='zy'){
+        return yearSelHas(_yl, String(q._paperYear||q.year||''));
+      }
+      var zy = qzYears(q);                       /* '|2024年|2025年'，无年份为 '' */
+      for(var i=0;i<_yl.length;i++){
+        var tok=_yl[i];
+        if(tok==='__none__'){ if(zy==='') return true; }      /* 未标注年份桶 */
+        else if(zy.indexOf('|'+tok+'年')>=0) return true;
+      }
+      return false;
     });
   }
   if(filterState.province && filterState.province!=='all'){
@@ -8690,7 +8761,8 @@ function getEssayQuestions(){ return getZoneQuestions(activeZone==='zy'?'zy':'sl
 function filterEssayQuestions(excludeField){
   var qs=getEssayQuestions();
   function active(field){ return field!==excludeField; }
-  if(active('year')&&filterState.year!=='all') qs=qs.filter(function(q){ return String(q._paperYear)===String(filterState.year); });
+  var _eyl = yearSelList();
+  if(active('year') && _eyl) qs=qs.filter(function(q){ return yearSelHas(_eyl, String(q._paperYear)); });
   if(active('province')&&filterState.province!=='all') qs=qs.filter(function(q){ return q._paperProvince===filterState.province; });
   if(active('subType')&&filterState.subType!=='all') qs=qs.filter(function(q){ return q._paperTopic===filterState.subType; });
   if(active('leafType')&&filterState.leafType!=='all') qs=qs.filter(function(q){ return q.leafCategory===filterState.leafType; });
@@ -8778,6 +8850,7 @@ function updateFilterOptions() {
     var essayYears={};
     essayQuestions.forEach(function(q){ if(q.year && q.year!=='未知') essayYears[q.year]=true; });
     yearFilter.innerHTML='<option value="all">全部年份</option>'+Object.keys(essayYears).sort(function(a,b){ return Number(b)-Number(a); }).map(function(y){ return '<option value="'+y+'">'+y+'年</option>'; }).join('');
+    if(typeof window.__qfSync === 'function') window.__qfSync();
     var provinces={}; essayQuestions.forEach(function(q){ provinces[q.province||'其他']=true; });
     provinceFilter.innerHTML='<option value="all">全部地区</option>'+ESSAY_PROVINCES.concat(['其他']).filter(function(p){ return provinces[p]; }).map(function(p){ return '<option value="'+p+'">'+p+'</option>'; }).join('');
     sourceFilter.value=''; sourceOptions.innerHTML=''; window.sourceValues=[]; window._sourceCount={};
@@ -8841,8 +8914,20 @@ function updateFilterOptions() {
         }).join('') +
         (noYearCount > 0 ? '<option value="__none__">未标注年份（' + noYearCount + '题）</option>' : '');
 
+    /* [FEATURE 2026-11-06] 重建 options 时保留用户已选的年份（原来硬重置成 all，
+       多选会被抹掉），只剔除在当前分区已经不存在（0 题）的年份。 */
+    var _prevYears = yearSelList();
     yearFilter.value = 'all';
-    filterState.year = 'all';
+    if(_prevYears){
+      var _alive = {};
+      for(var _oi=0;_oi<yearFilter.options.length;_oi++) _alive[yearFilter.options[_oi].value] = true;
+      var _keptYears = _prevYears.filter(function(t){ return _alive[t]; });
+      filterState.year = _keptYears.length ? _keptYears.join(',') : 'all';
+    }else{
+      filterState.year = 'all';
+    }
+    if(typeof window.__qfSync === 'function') window.__qfSync();
+    else if(yearFilter.options.length) yearFilter.options[0].textContent = yearSelText();
 
     function extractYearForSort(source) {
         var match = source.match(/(\d{4})/);
@@ -9045,7 +9130,10 @@ function applyFilterStateToUI(){
   if(searchBox) searchBox.value=filterState.search;
   if(minRatioInput) minRatioInput.value=filterState.minRatio;
   if(maxRatioInput) maxRatioInput.value=filterState.maxRatio;
-  if(yearFilter) filterState.year=yearFilter.value; if(provinceFilter) filterState.province=provinceFilter.value; if(sourceFilter) filterState.source=sourceFilter.value;
+  /* [FEATURE 2026-11-06] 年份改为多选面板后，隐藏的原生 select 只当「选项数据源」，
+     它的 value 恒为 'all'。若照旧无条件回写，会把多选集合覆盖成 all —— 这里加保护。 */
+  if(yearFilter && !yearSelList()) filterState.year = yearFilter.value || 'all';
+  if(provinceFilter) filterState.province=provinceFilter.value; if(sourceFilter) filterState.source=sourceFilter.value;
   if(statusFilter) filterState.status=statusFilter.value;
   // [FIX 20260930] 只在 sortFilter.value 是合法排序值时回写 sortBy，
   // 防止某些边缘场景把区间值写进 sortBy，导致排序失效。
@@ -9056,6 +9144,8 @@ function applyFilterStateToUI(){
     else if(_v === 'default' || _v === 'ratioDesc' || _v === 'ratioAsc') filterState.sortBy = _v;
   }
   if(searchBox) filterState.search=searchBox.value; if(minRatioInput) filterState.minRatio=minRatioInput.value; if(maxRatioInput) filterState.maxRatio=maxRatioInput.value;
+  /* [FEATURE 2026-11-06] 多选年份无法用一个 select.value 表示，摘要由面板负责同步 */
+  if(typeof window.__qfSync === 'function') window.__qfSync();
 }
 
 function renderFileList(){
@@ -9252,11 +9342,12 @@ function getSpecialQuestionType(question){
 function getFiltered(skipSort){
   let qs=getZoneQuestions(activeZone, '__all__');
   const kw=normalizeSearchText(filterState.search);
+  const _fyl=yearSelList();          /* [FEATURE 2026-11-06] 年份可多选 */
 
   if(activeZone==='sl'||activeZone==='zy'){
     // 申论/综应：保持全文搜索（材料 / 题目 / 答案 / 解析）
     if(kw) qs=qs.filter(function(q){ return getZoneSearchText(q).indexOf(kw)>=0; });
-    if(filterState.year!=='all') qs=qs.filter(function(q){ return q._paperYear===filterState.year; });
+    if(_fyl) qs=qs.filter(function(q){ return yearSelHas(_fyl, String(q._paperYear||'')); });
     if(filterState.province!=='all') qs=qs.filter(function(q){ return (q._paperProvince||'其他')===filterState.province; });
     if(filterState.subType!=='all') qs=qs.filter(function(q){ return (q._paperTopic||'其他')===filterState.subType; });
     if(filterState.leafType!=='all') qs=qs.filter(function(q){ return (q.leafCategory||'其他')===filterState.leafType; });
@@ -9277,8 +9368,11 @@ function getFiltered(skipSort){
     // 面试：保持全文搜索（题目 / 参考答案 / 解析）
     if(kw) qs=qs.filter(function(q){ return getZoneSearchText(q).indexOf(kw)>=0; });
     // [UI 2026-10-21d] 年份筛选：与年份下拉的生成口径一致（试卷名优先，其次来源）
-    if(filterState.year && filterState.year!=='all'){
-      qs=qs.filter(function(q){ return String(extractYear(q.paperName||q.source||''))===String(filterState.year); });
+    if(_fyl){
+      qs=qs.filter(function(q){
+        var n=extractYear(q.paperName||q.source||'');
+        return n ? yearSelHas(_fyl, String(n)) : false;   /* extractYear 抠不出时返回 0 */
+      });
     }
     if(filterState.province!=='all') qs=qs.filter(function(q){ return (q.region||'其他')===filterState.province; });
     if(filterState.module!=='all') qs=qs.filter(function(q){ return getSpecialQuestionType(q)===filterState.module; });
@@ -9304,12 +9398,16 @@ function getFiltered(skipSort){
   // 年份（口径：source 中出现的年份集合，由 extractYearTokens() 统一提取；
   //         '__none__' 为「未标注年份」桶，用来承接 source 里根本没有年份的题，
   //         保证「各年份题数 + 未标注 == 分区总题数」）
-  if(filterState.year!=='all'){
-    if(filterState.year==='__none__'){
-      qs=qs.filter(q=>qzYears(q)==='');
-    }else{
-      qs=qs.filter(q=>qzYears(q).indexOf('|'+filterState.year+'年')>=0);
-    }
+  if(_fyl){
+    qs=qs.filter(function(q){
+      var zy=qzYears(q);
+      for(var i=0;i<_fyl.length;i++){
+        var tok=_fyl[i];
+        if(tok==='__none__'){ if(zy==='') return true; }     /* 「未标注年份」桶 */
+        else if(zy.indexOf('|'+tok+'年')>=0) return true;
+      }
+      return false;
+    });
   }
 
   // 省份（「省考」为聚合项：除国考以外的地方考试题，见 qzProvMatch）
@@ -12738,7 +12836,7 @@ function findQuestionByFingerprint(contentPrefix, optionsPrefix, answer){
 function buildExportName(tag){
   const parts=[tag||'', zoneName(activeZone)];
   if(filterState.module!=='all') parts.push(filterState.module);
-  if(filterState.year!=='all') parts.push(filterState.year==='__none__' ? '未标注年份' : filterState.year+'年');
+  if(yearSelList()) parts.push(yearSelList().map(function(t){ return t==='__none__' ? '未标注年份' : t+'年'; }).join('+'));   /* 多选：2024年+2025年 */
   if(filterState.source!=='all') parts.push(filterState.source);
   const sm={unanswered:'未做',answered:'已做',wrong:'错题',correct:'做对'};
   if(filterState.status!=='all') parts.push(sm[filterState.status]);
@@ -14125,6 +14223,170 @@ searchBox.addEventListener('keydown', function(e){
   }
 });
 yearFilter.addEventListener('change', ()=>{ filterState.year=yearFilter.value; currentPage=1; saveView(); refreshFilterCounters(); renderQuestions(); });
+
+/* ===== [FEATURE 2026-11-06] 年份多选面板 =====
+   需求：年份筛选原来只能选一个，改为可同时勾选多个年份。
+   做法：#yearFilter 保持原生 <select>（九宫格布局、各分区 padding/字号规则全部沿用，
+       零布局风险），CSS 上设 pointer-events:none，点击穿透到 .filter-bar，
+       这里按坐标判定是否点在 select 上，是则弹出自绘复选面板。
+       select 的 options 继续当唯一数据源（renderAll 重建它们时不用改），
+       第 1 项（value=all）的文本被改写成「当前选择摘要」，外观与原来一致。
+   数据：filterState.year 存逗号分隔的年份集合，'all' 表示不筛选。 */
+(function installYearMultiPicker(){
+  var sel = document.getElementById('yearFilter');
+  var bar = document.getElementById('filterBar');
+  if(!sel || !bar) return;
+
+  var panel = document.createElement('div');
+  panel.id = 'qfPanel';
+  panel.setAttribute('role','listbox');
+  panel.setAttribute('aria-label','年份（可多选）');
+  panel.setAttribute('aria-multiselectable','true');
+  document.body.appendChild(panel);
+
+  /* 从原生 select 的 options 读出 {value,label,count}；'all' 不算候选项 */
+  function readOptions(){
+    var out = [];
+    for(var i=0;i<sel.options.length;i++){
+      var o = sel.options[i];
+      if(o.value === 'all') continue;
+      var txt = String(o.textContent || '').trim();
+      var label = txt, cnt = null;
+      var m = txt.match(/^(.*?)[（(](\d+)题[）)]$/);
+      if(m){ label = m[1].trim(); cnt = Number(m[2]); }
+      out.push({ v: o.value, label: label, count: cnt });
+    }
+    return out;
+  }
+
+  /* 集合统一按年份降序（「未标注」垫底），保证摘要与面板顺序稳定 */
+  function setSel(arr){
+    var a = (arr || []).slice().sort(function(x, y){
+      if(x === '__none__') return 1;
+      if(y === '__none__') return -1;
+      return Number(y) - Number(x);
+    });
+    filterState.year = a.length ? a.join(',') : 'all';
+  }
+
+  /* 摘要写回 select 第 1 项，保持与原生控件视觉一致 */
+  function syncLabel(){
+    try{
+      if(sel.options.length) sel.options[0].textContent = yearSelText();
+      sel.value = 'all';
+    }catch(e){}
+  }
+
+  function render(){
+    var opts = readOptions();
+    var cur = yearSelList() || [];
+    if(!opts.length){
+      panel.innerHTML = '<div class="qf-empty">当前分区没有可选的年份</div>';
+      syncLabel();
+      return;
+    }
+    var html = '<div class="qf-head">'
+      + '<button type="button" data-act="all">全选</button>'
+      + '<button type="button" data-act="none">清空</button>'
+      + '</div>';
+    html += opts.map(function(o){
+      var on = cur.indexOf(o.v) >= 0;
+      var cnt = (o.count == null) ? '' : '<span class="qf-cnt">' + o.count + '题</span>';
+      return '<div class="qf-opt' + (on ? ' selected' : '') + '" role="option"'
+        + ' aria-selected="' + (on ? 'true' : 'false') + '"'
+        + ' data-v="' + escapeHtml(o.v) + '"><span>' + escapeHtml(o.label) + '</span>' + cnt + '</div>';
+    }).join('');
+    panel.innerHTML = html;
+    syncLabel();
+  }
+
+  function apply(){
+    currentPage = 1;
+    try{ saveView(); }catch(e){}
+    try{ if(typeof refreshFilterCounters === 'function') refreshFilterCounters(); }catch(e){}
+    /* 面试分区：年份 / 地区 / 题型三向级联，改年份要重建另外两个下拉
+       （与原来 yearFilter.onchange 里的 window.updateSubTypeFilter() 一致） */
+    if(typeof activeZone !== 'undefined' && activeZone === 'ms'){
+      try{ if(typeof window.updateSubTypeFilter === 'function') window.updateSubTypeFilter(); }catch(e){}
+    }
+    try{ renderQuestions(); }catch(e){}
+  }
+
+  function openPanel(){
+    panel.classList.add('open');
+    render();
+    var r = sel.getBoundingClientRect();
+    var pw = Math.min(300, Math.max(210, window.innerWidth - 24));
+    panel.style.width = pw + 'px';
+    var maxH = Math.min(Math.round(window.innerHeight * 0.6), 380);
+    panel.style.maxHeight = maxH + 'px';
+    var h = Math.min(panel.scrollHeight || maxH, maxH);
+    var left = r.left;
+    if(left + pw > window.innerWidth - 12) left = window.innerWidth - 12 - pw;
+    if(left < 12) left = 12;
+    var top = r.bottom + 6;
+    if(top + h > window.innerHeight - 12) top = Math.max(12, r.top - h - 6);   /* 下方放不下就翻到上方 */
+    panel.style.left = Math.round(left) + 'px';
+    panel.style.top  = Math.round(top) + 'px';
+  }
+  function closePanel(){ panel.classList.remove('open'); }
+  function togglePanel(){ panel.classList.contains('open') ? closePanel() : openPanel(); }
+
+  /* select 已被 pointer-events:none，点击落在 .filter-bar 上，用坐标判断 */
+  function hitSelect(x, y){
+    var r = sel.getBoundingClientRect();
+    if(!r.width && !r.height) return false;          /* display:none 的分区不算 */
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  }
+  bar.addEventListener('click', function(e){
+    if(!hitSelect(e.clientX, e.clientY)) return;
+    e.preventDefault(); e.stopPropagation();
+    togglePanel();
+  });
+  /* pointer-events:none 不影响键盘焦点，Tab 到年份格后回车/空格也能打开面板 */
+  sel.addEventListener('keydown', function(e){
+    if(e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown'){
+      e.preventDefault(); openPanel();
+    }
+  });
+
+  panel.addEventListener('click', function(e){
+    e.stopPropagation();
+    var t = e.target.closest ? e.target.closest('[data-act],.qf-opt') : null;
+    if(!t) return;
+    e.preventDefault();
+    var act = t.getAttribute('data-act');
+    if(act){
+      setSel(act === 'all' ? readOptions().map(function(o){ return o.v; }) : []);
+    }else{
+      var v = t.getAttribute('data-v');
+      var cur = yearSelList() || [];
+      var at = cur.indexOf(v);
+      if(at >= 0) cur.splice(at, 1); else cur.push(v);
+      setSel(cur);
+    }
+    render();          /* 面板不自动关闭：可以连续勾多个年份 */
+    apply();
+  });
+
+  /* 点面板外部关闭：用 pointerdown 捕获阶段，避免被题目卡片等处的 stopPropagation 吞掉
+     （实测 click 冒泡监听在桌面端点外部关不掉）。点年份格本身要放行，交给上面的 toggle。 */
+  document.addEventListener('pointerdown', function(e){
+    if(!panel.classList.contains('open')) return;
+    if(panel.contains(e.target)) return;
+    if(hitSelect(e.clientX, e.clientY)) return;
+    closePanel();
+  }, true);
+  document.addEventListener('keydown', function(e){ if(e.key === 'Escape') closePanel(); });
+  window.addEventListener('resize', closePanel);
+  window.addEventListener('scroll', closePanel, { passive: true, capture: true });
+
+  /* renderAll 会重建 select 的 options（客观题 / 面试两个分区各一处），
+     重建后摘要文本会丢，这里对外暴露一个同步入口，由重建处调用。 */
+  window.__qfSync = function(){
+    if(panel.classList.contains('open')) render(); else syncLabel();
+  };
+})();
 sourceFilter.addEventListener('focus', ()=>{ renderSourceSuggestions(''); });
 sourceFilter.addEventListener('pointerdown', ()=>{
   renderSourceSuggestions('');
@@ -16288,10 +16550,11 @@ window.updateSubTypeFilter = function() {
     //   那样 self='province' 时 regions 会永远是空对象，地区下拉直接变空白。
     var collectMsStats=function(self){
       var ys={}, rs={}, ts={};
+      var yl=yearSelList();                     /* [FEATURE 2026-11-06] 年份可多选 */
       for(var i=0;i<specialQs.length;i++){
         var q=specialQs[i];
         var y=msYearOf(q), r=msRegionOf(q), t=getSpecialQuestionType(q);
-        if(self!=='year' && filterState.year!=='all' && y!==filterState.year) continue;
+        if(self!=='year' && yl && !yearSelHas(yl, y)) continue;
         if(self!=='province' && filterState.province!=='all' && r!==filterState.province) continue;
         if(self!=='type' && filterState.module!=='all' && t!==filterState.module) continue;
         if(y) ys[y]=(ys[y]||0)+1;
@@ -16304,7 +16567,12 @@ window.updateSubTypeFilter = function() {
     for(var guard=0;guard<2;guard++){
       var all=collectMsStats('');
       var fixed=false;
-      if(filterState.year!=='all' && !all.years[filterState.year]){ filterState.year='all'; fixed=true; }
+      /* [FEATURE 2026-11-06] 多选年份：逐个剔除已失效的年份，全部失效才退回「全部」 */
+      var _ylFix=yearSelList();
+      if(_ylFix){
+        var _kept=_ylFix.filter(function(t){ return all.years[t]; });
+        if(_kept.length!==_ylFix.length){ filterState.year = _kept.length ? _kept.join(',') : 'all'; fixed=true; }
+      }
       if(filterState.province!=='all' && !all.regions[filterState.province]){ filterState.province='all'; fixed=true; }
       if(filterState.module!=='all' && !all.types[filterState.module]){ filterState.module='all'; fixed=true; }
       if(!fixed) break;
@@ -16319,6 +16587,9 @@ window.updateSubTypeFilter = function() {
     leafTypeFilter.style.display='none';
     var msYearStats=collectMsStats('year').years;
     yearFilter.innerHTML='<option value="all">全部年份</option>'+Object.keys(msYearStats).sort(function(a,b){ return Number(b)-Number(a); }).map(function(y){ return '<option value="'+y+'">'+y+'年 ('+msYearStats[y]+'题)</option>'; }).join('');
+    /* [FEATURE 2026-11-06] 重建后把多选摘要同步回第 1 项 */
+    if(typeof window.__qfSync === 'function') window.__qfSync();
+    else if(yearFilter.options.length) yearFilter.options[0].textContent = yearSelText();
     // 地区选项：按「年份 + 题型」联动统计（0 题的组合不会出现）
     var regionStats=collectMsStats('province').regions;
     provinceFilter.innerHTML=makeOptions('全部地区',regionStats);
