@@ -999,12 +999,19 @@ body.ms-zone.pc-mode .filter-bar .sf-multi { display: none !important; }
   position: fixed; z-index: 100060; display: none; box-sizing: border-box;
   min-width: 200px; max-width: 300px; overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  /* 面板内滚到边界时不许把滚动链给页面 —— 一旦页面滚了，下面的 scroll 监听
+     就会把面板收掉，表现成「手指一滑面板就没了」。 */
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   background: var(--surface, #fff); border: 1px solid var(--border, #dbe7f5);
   border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.18); padding: 6px;
 }
 #qfPanel.open { display: block; }
 #qfPanel .qf-head { display: flex; gap: 6px; padding: 4px 4px 8px; margin-bottom: 4px;
-  border-bottom: 1px solid var(--light, #eef2f7); }
+  border-bottom: 1px solid var(--light, #eef2f7);
+  /* 年份多的时候列表要滚动，全选/清空必须常驻顶部，不能跟着滚走 */
+  position: sticky; top: -6px; z-index: 1;
+  background: var(--surface, #fff); }
 #qfPanel .qf-head button { flex: 1 1 0; min-height: 32px; font-size: 12px; font-family: inherit;
   border: 1px solid var(--border, #dbe7f5); background: var(--surface, #fff); color: var(--deep);
   border-radius: 7px; cursor: pointer; }
@@ -1021,6 +1028,7 @@ body.ms-zone.pc-mode .filter-bar .sf-multi { display: none !important; }
 #qfPanel .qf-empty { padding: 14px 10px; font-size: 12.5px;
   color: var(--text-muted, #5a6b80); text-align: center; }
 body.skin-dark #qfPanel { background: var(--surface, #1c2333); border-color: var(--border, #52627a); }
+body.skin-dark #qfPanel .qf-head { background: var(--surface, #1c2333); border-bottom-color: var(--border, #52627a); }
 body.skin-dark #qfPanel .qf-opt { color: var(--text, #e6edf5); }
 body.skin-dark #qfPanel .qf-opt:hover { background: rgba(255,255,255,.08); }
 body.skin-dark #qfPanel .qf-head button { background: var(--surface, #1c2333);
@@ -8622,7 +8630,7 @@ function yearSelText(){
   var names = l.map(function(t){ return t==='__none__' ? '未标注' : t; });
   if(names.length === 1) return names[0] + '年';
   if(names.length === 2) return names[0] + '/' + names[1];   /* 窄格显示得下 */
-  return '已选' + names.length + '个年份';
+  return '已选' + names.length + '年';                        /* 格子只有 ~109px，再长就被截断 */
 }
 function getFilterBaseQuestions(){
   var sig = filterBaseSignature();
@@ -8920,7 +8928,15 @@ function updateFilterOptions() {
     yearFilter.value = 'all';
     if(_prevYears){
       var _alive = {};
-      for(var _oi=0;_oi<yearFilter.options.length;_oi++) _alive[yearFilter.options[_oi].value] = true;
+      for(var _oi=0;_oi<yearFilter.options.length;_oi++){
+        var _o = yearFilter.options[_oi];
+        if(_o.value === 'all') continue;
+        /* 只认「有题」的年份：视图尚未就绪时 updateFilterOptions 会拿兜底年份
+           （2027/2026/2025）建选项，若此时把当年的集合写回，就会残留一堆 0 题年份，
+           表现为「年份自动勾了几项、列表却空」。0 题项一律剔除。 */
+        var _cm = String(_o.textContent || '').match(/[（(](\d+)题[）)]/);
+        if(!_cm || Number(_cm[1]) > 0) _alive[_o.value] = true;
+      }
       var _keptYears = _prevYears.filter(function(t){ return _alive[t]; });
       filterState.year = _keptYears.length ? _keptYears.join(',') : 'all';
     }else{
@@ -14244,6 +14260,8 @@ yearFilter.addEventListener('change', ()=>{ filterState.year=yearFilter.value; c
   panel.setAttribute('aria-multiselectable','true');
   document.body.appendChild(panel);
 
+  var silentUntil = 0;      /* 此时间点之前发生的 scroll / resize 不关闭面板（自己引起的重排） */
+
   /* 从原生 select 的 options 读出 {value,label,count}；'all' 不算候选项 */
   function readOptions(){
     var out = [];
@@ -14278,6 +14296,7 @@ yearFilter.addEventListener('change', ()=>{ filterState.year=yearFilter.value; c
   }
 
   function render(){
+    var keep = panel.scrollTop;           /* 勾选后重建内容，别把滚动位置弹回顶部 */
     var opts = readOptions();
     var cur = yearSelList() || [];
     if(!opts.length){
@@ -14297,11 +14316,15 @@ yearFilter.addEventListener('change', ()=>{ filterState.year=yearFilter.value; c
         + ' data-v="' + escapeHtml(o.v) + '"><span>' + escapeHtml(o.label) + '</span>' + cnt + '</div>';
     }).join('');
     panel.innerHTML = html;
+    if(keep) panel.scrollTop = Math.min(keep, Math.max(0, panel.scrollHeight - panel.clientHeight));
     syncLabel();
   }
 
   function apply(){
     currentPage = 1;
+    /* 重绘题目列表会让页面高度变化，浏览器自动夹取 scrollY 会打出 scroll 事件；
+       那段滚动不是用户滚的，不能据此收起面板。 */
+    silentUntil = Date.now() + 800;
     try{ saveView(); }catch(e){}
     try{ if(typeof refreshFilterCounters === 'function') refreshFilterCounters(); }catch(e){}
     /* 面试分区：年份 / 地区 / 题型三向级联，改年份要重建另外两个下拉
@@ -14312,22 +14335,32 @@ yearFilter.addEventListener('change', ()=>{ filterState.year=yearFilter.value; c
     try{ renderQuestions(); }catch(e){}
   }
 
-  function openPanel(){
-    panel.classList.add('open');
-    render();
+  /* 面板定位抽出来：打开时、以及「高度变了」（软键盘 / 地址栏）时重算，不用重排内容 */
+  function placePanel(){
     var r = sel.getBoundingClientRect();
-    var pw = Math.min(300, Math.max(210, window.innerWidth - 24));
+    var vw = window.innerWidth;
+    var vh = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+    var pw = Math.min(300, Math.max(210, vw - 24));
     panel.style.width = pw + 'px';
-    var maxH = Math.min(Math.round(window.innerHeight * 0.6), 380);
+    var maxH = Math.min(Math.round(vh * 0.6), 380);
     panel.style.maxHeight = maxH + 'px';
     var h = Math.min(panel.scrollHeight || maxH, maxH);
     var left = r.left;
-    if(left + pw > window.innerWidth - 12) left = window.innerWidth - 12 - pw;
+    if(left + pw > vw - 12) left = vw - 12 - pw;
     if(left < 12) left = 12;
     var top = r.bottom + 6;
-    if(top + h > window.innerHeight - 12) top = Math.max(12, r.top - h - 6);   /* 下方放不下就翻到上方 */
+    if(top + h > vh - 12) top = Math.max(12, r.top - h - 6);   /* 下方放不下就翻到上方 */
     panel.style.left = Math.round(left) + 'px';
     panel.style.top  = Math.round(top) + 'px';
+  }
+  function openPanel(){
+    var r0 = sel.getBoundingClientRect();
+    if(!r0.width && !r0.height) return;                       /* 该分区没有年份控件 */
+    if(r0.bottom < 0 || r0.top > window.innerHeight) return;  /* 年份格不在视口，别弹到屏幕中间 */
+    panel.classList.add('open');
+    silentUntil = Date.now() + 400;      /* 打开瞬间可能伴随重排/夹取滚动，别一开就自关 */
+    render();
+    placePanel();
   }
   function closePanel(){ panel.classList.remove('open'); }
   function togglePanel(){ panel.classList.contains('open') ? closePanel() : openPanel(); }
@@ -14369,6 +14402,25 @@ yearFilter.addEventListener('change', ()=>{ filterState.year=yearFilter.value; c
     apply();
   });
 
+  /* 面板内部滑动不能被当成「滚了页面」：scroll 不冒泡，但 window 上的 capture 监听
+     照样收得到滚动容器的事件，原先不加判据 —— 手指一滑年份列表，面板立刻消失。
+     内容不溢出时浏览器会把滚动链给页面，这里直接吃掉 touchmove；
+     溢出但滚到顶/底时同理，防止惯性越界带动页面。 */
+  var _touchStartY = 0;
+  panel.addEventListener('touchstart', function(e){
+    if(e.touches.length === 1) _touchStartY = e.touches[0].clientY;
+  }, { passive: true });
+  panel.addEventListener('touchmove', function(e){
+    if(e.touches.length !== 1) return;
+    var y = e.touches[0].clientY;
+    var dy = y - _touchStartY;
+    _touchStartY = y;
+    if(panel.scrollHeight <= panel.clientHeight + 1){ e.preventDefault(); return; }
+    var atTop = panel.scrollTop <= 0;
+    var atBottom = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 1;
+    if((atTop && dy > 0) || (atBottom && dy < 0)) e.preventDefault();
+  }, { passive: false });
+
   /* 点面板外部关闭：用 pointerdown 捕获阶段，避免被题目卡片等处的 stopPropagation 吞掉
      （实测 click 冒泡监听在桌面端点外部关不掉）。点年份格本身要放行，交给上面的 toggle。 */
   document.addEventListener('pointerdown', function(e){
@@ -14378,13 +14430,34 @@ yearFilter.addEventListener('change', ()=>{ filterState.year=yearFilter.value; c
     closePanel();
   }, true);
   document.addEventListener('keydown', function(e){ if(e.key === 'Escape') closePanel(); });
-  window.addEventListener('resize', closePanel);
-  window.addEventListener('scroll', closePanel, { passive: true, capture: true });
+
+  /* 只有「宽度变了」（横竖屏 / 窗口缩放）才必须收起；
+     移动端地址栏收放、软键盘弹出只改高度，重贴一下位置就够，收起来纯属捣乱。 */
+  var _lastW = window.innerWidth;
+  window.addEventListener('resize', function(){
+    if(!panel.classList.contains('open')) return;
+    var w = window.innerWidth;
+    var dw = Math.abs(w - _lastW);
+    _lastW = w;
+    if(dw > 2){ closePanel(); return; }
+    if(Date.now() < silentUntil) return;
+    placePanel();
+  });
+
+  /* 页面滚动：面板内滚动一律放行；页面真的滚了就收起（用户是在看别的，不是在勾年份）。 */
+  window.addEventListener('scroll', function(e){
+    if(!panel.classList.contains('open')) return;
+    var t = e.target;
+    if(t === panel) return;
+    if(t && t.nodeType === 1 && panel.contains(t)) return;   /* 面板内的子元素滚动 */
+    if(Date.now() < silentUntil) return;                     /* 自己重排引起的夹取滚动 */
+    closePanel();
+  }, { passive: true, capture: true });
 
   /* renderAll 会重建 select 的 options（客观题 / 面试两个分区各一处），
      重建后摘要文本会丢，这里对外暴露一个同步入口，由重建处调用。 */
   window.__qfSync = function(){
-    if(panel.classList.contains('open')) render(); else syncLabel();
+    if(panel.classList.contains('open')){ render(); placePanel(); } else syncLabel();
   };
 })();
 sourceFilter.addEventListener('focus', ()=>{ renderSourceSuggestions(''); });
