@@ -1216,6 +1216,24 @@ body.skin-dark .search-float-counter { color:#a0aec0; }
    图片提升为独立 GPU 合成层，导致 WebKit 在图片加载完成后不刷新纹理、图片始终空白。
    图片的真正显示靠 renderQuestions 末尾的「原生加载 + 公共代理兜底」方案（见 JS）。 */
 .q-content img, .q-solution img { display: block; max-width: 100%; height: auto; -webkit-touch-callout: none; }
+/* [FIX 2026-11-05] 申论/综应「参考答案 · 解析」里的图片原来没有 max-width：
+   粉笔原图自带 width="800px" 之类的表现属性（HTML 属性优先级低于 CSS，但没写 CSS 就等于不生效），
+   手机上图片直接撑到 800px 宽，被 html/body 的 overflow-x:hidden 裁掉右半边 —— 表现就是「解析配图看不全」。
+   这里把这几类容器里的图片统一收进容器宽度，并保留原始比例。 */
+.essay-answer img, .essay-analysis img, .mian-shi-answer img {
+  display: block; max-width: 100% !important; height: auto !important; margin: 8px auto; -webkit-touch-callout: none;
+}
+/* 兜底：万一解析正文里还套了固定像素宽的 <div>/<table>（粉笔富文本常见），
+   让内层可以横向滑动，而不是把右半边硬裁掉。 */
+.essay-answer > div, .essay-analysis > div, .mian-shi-answer > div {
+  max-width: 100%; box-sizing: border-box; overflow-x: auto;
+}
+/* 图片放大查看（点题干 / 材料 / 参考答案 / 解析里的图片）：手机屏窄，思维导图缩到 100% 会小到看不清，
+   所以给一个按原始尺寸、可上下左右拖动的全屏视图。 */
+#imgZoom { position: fixed; inset: 0; z-index: 100020; background: rgba(15,23,42,.94); display: none; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 8px; box-sizing: border-box; }
+#imgZoom.show { display: block; }
+#imgZoom img { display: block; margin: 0 auto; max-width: none !important; width: auto; height: auto; background: #fff; }
+#imgZoom .img-zoom-tip { position: fixed; left: 0; right: 0; bottom: calc(10px + env(safe-area-inset-bottom)); text-align: center; color: #e2e8f0; font-size: 13px; pointer-events: none; text-shadow: 0 1px 4px rgba(0,0,0,.9); }
 /* 自定义确认弹窗（替代原生 confirm）：iOS“添加到主屏幕”独立模式 / 部分 App 内置浏览器会静默禁用
    confirm()/alert()，导致删除文件、清空分区、重置进度、导入备份等依赖 confirm 的操作点不动（函数直接 return）。
    用页面内弹窗可彻底规避该问题。 */
@@ -9676,6 +9694,48 @@ function setupImgObserver(){
   });
   _imgObserver.observe(content, {childList:true, subtree:true});
 }
+// ============================================================
+// 图片放大查看（2026-11-05 新增）
+// 目的：题干 / 材料 / 参考答案 / 解析里的图片在 390px 宽的手机上被压到 100% 会看不清
+//      （尤其是申论、综应的思维导图），点一下给一个按原始像素、可拖动的全屏视图。
+// 说明：只接管内容区里的 <img>，不影响其它按钮/选项的点击。
+// ============================================================
+var _imgZoomEl=null;
+function ensureImgZoom(){
+  if(_imgZoomEl && _imgZoomEl.isConnected) return _imgZoomEl;
+  var ov=document.createElement('div');
+  ov.id='imgZoom';
+  ov.innerHTML='<img alt="图片"><div class="img-zoom-tip">拖动查看 · 点一下关闭</div>';
+  ov.addEventListener('click', function(){ closeImgZoom(); });
+  document.body.appendChild(ov);
+  _imgZoomEl=ov;
+  return ov;
+}
+function openImgZoom(src){
+  if(!src) return;
+  var ov=ensureImgZoom();
+  ov.querySelector('img').src=src;
+  ov.classList.add('show');
+  ov.scrollTop=0; ov.scrollLeft=0;
+  document.documentElement.style.overflow='hidden';
+}
+function closeImgZoom(){
+  if(!_imgZoomEl || !_imgZoomEl.classList.contains('show')) return;
+  _imgZoomEl.classList.remove('show');
+  _imgZoomEl.querySelector('img').removeAttribute('src');
+  document.documentElement.style.overflow='';
+}
+document.addEventListener('click', function(e){
+  var t=e.target;
+  if(!t || t.tagName!=='IMG' || !t.closest) return;
+  if(_imgZoomEl && _imgZoomEl.contains(t)) return;
+  if(!t.closest('.q-content, .q-solution, .q-material, .essay-answer, .essay-analysis, .mian-shi-answer')) return;
+  var src=t.currentSrc||t.src;
+  if(!src) return;
+  e.preventDefault();
+  openImgZoom(src);
+}, false);
+document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeImgZoom(); });
 // ============================================================
 // 公共 CORS 图片代理（最终兜底，替代已废弃的 fetch->Blob / Canvas 重解码）
 // 根因确认：iOS/Edge 的 WebKit 把 fb.fbstatic.cn / fb.fenbike.cn 的图片「作为 <img> 子资源」请求时，
