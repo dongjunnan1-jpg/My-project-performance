@@ -835,6 +835,29 @@ body:not(.essay-zone) .ratio-input { -moz-appearance: textfield !important; }
 
 }
 
+/* ===== [FIX 2026-11-05] 筛选栏图标尺寸兜底 =====
+   上面那批九宫格规则全部挂在 body:not(.essay-zone) 下。只要 body 的分区类一度滞后于
+   activeZone（上传后自动切分区 / 恢复备份 / 恢复视图都直接赋值 activeZone 再 renderAll），
+   这一整批规则就整块失效，SVG 背景图退回 background-size:auto —— 按 SVG 固有尺寸铺满
+   每个按钮，变成「图标巨大、文字被盖住、互相重叠」；.sf-clear-ico 也会回到 SVG 默认
+   300×150，变成一个大红叉。
+   这里用**更低特异性**（不带 body 前缀）再声明一次同样的值：正常情况下上面特异性更高的
+   规则胜出、表现完全不变；只有上面整块失效时这条才接管。
+   .filter-bar 是刷题区专用容器，申论/综应区用 .essay-top-filter，不受影响。 */
+.filter-bar select,
+.filter-bar input#sourceFilter,
+.filter-bar .sf-multi-btn,
+.filter-bar button[onclick*="clearFilters"] {
+  background-repeat: no-repeat !important;
+  background-size: 15px 15px, 9px 9px !important;
+  background-position: 7px center, right 7px center !important;
+}
+.filter-bar button[onclick*="clearFilters"] .sf-clear-ico {
+  position: absolute !important; left: 7px !important; top: 50% !important;
+  transform: translateY(-50%) !important;
+  width: 15px !important; height: 15px !important; flex: 0 0 15px !important;
+}
+
 /* ===== [UI 2026-10-21f] 控制栏（搜索框 + 操作按钮）与筛选栏统一风格 =====
    令牌与 [UI 2026-10-21] 完全同源：1px #d8c3c7 描边 / 8px 圆角 / 纯白底 / var(--deep) 文字 /
    46px（手机）·52px（≥769px）高度 / 15px 线稿图标（stroke 1.7，currentColor）/ 无阴影、
@@ -3455,7 +3478,7 @@ body.skin-dark .en-pagination button.active {
                 <div class="sf-opt" data-group="range" data-value="range61_80" role="option">正确率 61-80%</div>
                 <div class="sf-opt" data-group="range" data-value="range81_100" role="option">正确率 81-100%</div>
             </div>
-        </div> <select id="moduleFilter"><option value="all">全部模块</option></select> <select id="subTypeFilter"><option value="all">全部话题</option></select> <select id="leafTypeFilter"><option value="all">全部细分</option></select> <button class="btn btn-outline" onclick="clearFilters()"><svg class="sf-clear-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7.8"/><path d="M9.4 9.4l5.2 5.2M14.6 9.4l-5.2 5.2"/></svg><span>清除筛选</span></button>
+        </div> <select id="moduleFilter"><option value="all">全部模块</option></select> <select id="subTypeFilter"><option value="all">全部话题</option></select> <select id="leafTypeFilter"><option value="all">全部细分</option></select> <button class="btn btn-outline" onclick="clearFilters()"><svg class="sf-clear-ico" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7.8"/><path d="M9.4 9.4l5.2 5.2M14.6 9.4l-5.2 5.2"/></svg><span>清除筛选</span></button>
         <!-- [FIX 20261021] 原为 <label>：label 的隐式激活会把整行（「正确率」文字、~、% 及两侧空白）都变成点击热区，
              点空白也会聚焦到 #minRatioInput。改为 <div> 后只有精确点击 input 本身才进入输入，空白不响应。 -->
         <div class="ratio-label"><span class="ratio-label-text">正确率</span>
@@ -7499,7 +7522,25 @@ function zoneName(z){ const zz=ZONES.find(x=>x.id===z); return zz?zz.name:z; }
 // C2-B：renderAll 的「视图未就绪」重入标记（同一 zone+epoch 只重入一次）
 var _renderAllViewRetry = null;
 
+/* 分区类同步（2026-11-05）：body 的 essay-zone / zy-zone / ms-zone 必须与 activeZone 一致。
+   背景：改 activeZone 的地方不止 switchZone —— 上传后自动切分区（activeZone=zone）、
+   恢复备份（v.activeZone）、恢复视图（VIEW_KEY）都直接赋值后调 renderAll，
+   不会经过 applyZoneTheme 旁边那三行 toggle。一旦类滞后于内容，就会出现
+   「刷题区的内容 + essay-zone 的样式」：
+     · body:not(.essay-zone) .filter-bar 那批九宫格规则（grid 三列 / 46px 高 /
+       padding / background-size:15px）整体失效；
+     · 筛选栏 select 的 SVG 背景图退回 background-size:auto，按 SVG 固有尺寸铺满
+       整个按钮，看上去就是「图标巨大、文字被盖住、互相重叠」；
+     · .sf-clear-ico 失去 15px 尺寸约束，回到 SVG 默认 300×150，变成一个大红叉。
+   放在 renderAll 入口兜一次，幂等、不依赖调用顺序。 */
+function syncZoneBodyClasses(){
+  var z = activeZone;
+  document.body.classList.toggle('essay-zone', z==='sl'||z==='zy');
+  document.body.classList.toggle('zy-zone', z==='zy');
+  document.body.classList.toggle('ms-zone', z==='ms');
+}
 function renderAll(){
+  syncZoneBodyClasses();
   // C2-B 闸门：模块栏 / 计数 / 子类下拉 / 文件列表 / 题目列表**全部**来自「分区题目全集」。
   //   视图未就绪（该分区还有文件没建出轻量记录）时先建视图再重入，绝不拿空集合渲染。
   //   一次性：同一 (zone, dbEpoch) 只重入一次（ensureZoneView 内部把失败文件记入
