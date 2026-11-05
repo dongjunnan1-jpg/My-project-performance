@@ -21328,10 +21328,19 @@ function fallbackCopyML(text){
    Part 2B-1：素材库 —— 选中文字浮按钮 + 快速保存弹窗
    ============================================================ */
 var mlSelBtn = null;
+/* [FIX 20261106c] 点过浮按钮后的抑制期：touchend 的 180ms 定时器与 selectionchange
+   会在弹窗打开后又把浮按钮画回来，盖在弹窗上，用户以为「没反应」。 */
+var mlSelSuppressUntil = 0;
 function mlRemoveSelBtn(){
   if(mlSelBtn && mlSelBtn.parentNode) mlSelBtn.parentNode.removeChild(mlSelBtn);
   mlSelBtn = null;
 }
+/* [FIX 20261106c] 手机上点浮按钮「完全没反应」——弹窗不出来，素材自然进不了库。
+   真因：btn 的 touchstart 里调了 preventDefault()。移动端 touchstart 被 preventDefault
+   之后，浏览器不再合成 mousedown/mouseup/click，click 回调永远不触发。
+   实测（390×844 触摸模拟）：点击浮按钮后 document 上 click 事件数 = 0，弹窗 shown=null。
+   改法：touchstart 只阻止冒泡（不阻止默认行为），由 touchend 直接触发；click 作桌面兜底；
+   用闭包里的 fired 去重，避免 touchend 与 click 双开弹窗。 */
 function mlShowSelBtn(rect, text, questionEl){
   mlRemoveSelBtn();
   var btn = document.createElement('button');
@@ -21340,13 +21349,39 @@ function mlShowSelBtn(rect, text, questionEl){
   btn.textContent = '📚 加入素材库';
   btn.style.left = (rect.left + rect.width / 2 + window.pageXOffset) + 'px';
   btn.style.top  = (rect.top + window.pageYOffset - 8) + 'px';
-  btn.addEventListener('mousedown', function(e){ e.preventDefault(); e.stopPropagation(); });
-  btn.addEventListener('touchstart', function(e){ e.preventDefault(); e.stopPropagation(); }, {passive:false});
-  btn.addEventListener('click', function(e){
-    e.preventDefault(); e.stopPropagation();
+  /* [FIX 20261106c] 选区贴到屏幕顶端时，按钮（translate -100%）会被顶出可视区，
+     手机上表现为「选了但按钮看不见」。放不下就改到选区下方，左右也做一次夹取。 */
+  try{
+    var vv = window.visualViewport;
+    var vh = (vv && vv.height) ? vv.height : window.innerHeight;
+    var vTop = ((vv && vv.offsetTop) || 0) + window.pageYOffset;
+    var vw = (vv && vv.width) ? vv.width : window.innerWidth;
+    var vLeft = ((vv && vv.offsetLeft) || 0) + window.pageXOffset;
+    if(rect.top + window.pageYOffset - 8 - 38 < vTop + 4){
+      btn.style.top = (rect.bottom + window.pageYOffset + 8) + 'px';
+      btn.style.transform = 'translate(-50%,0)';
+    }
+    var cx = rect.left + rect.width / 2 + window.pageXOffset;
+    var half = 70;   /* 按钮半宽（约 140px） */
+    if(cx - half < vLeft + 6) cx = vLeft + 6 + half;
+    if(cx + half > vLeft + vw - 6) cx = vLeft + vw - 6 - half;
+    btn.style.left = cx + 'px';
+  }catch(e){}
+  var fired = false;
+  function fire(e){
+    if(e){ if(e.cancelable) e.preventDefault(); e.stopPropagation(); }
+    if(fired) return;
+    fired = true;
+    mlSelSuppressUntil = Date.now() + 1500;   /* 抑制期内不再重建浮按钮 */
     mlRemoveSelBtn();
     mlOpenQuickSave(text, questionEl);
-  });
+  }
+  /* mousedown 阻止默认：桌面端点按钮不会把选区塌陷掉 */
+  btn.addEventListener('mousedown', function(e){ e.preventDefault(); e.stopPropagation(); });
+  /* touchstart 只阻止冒泡：一旦 preventDefault，iOS/Safari 就不再派发 click */
+  btn.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
+  btn.addEventListener('touchend', fire, {passive:false});
+  btn.addEventListener('click', fire);
   document.body.appendChild(btn);
   mlSelBtn = btn;
 }
@@ -21354,6 +21389,7 @@ function mlZoneAllowed(){
   return activeZone === 'sl' || activeZone === 'zy' || activeZone === 'ms';
 }
 function mlSelectionHandler(){
+  if(Date.now() < mlSelSuppressUntil){ mlRemoveSelBtn(); return; }
   if(document.body.classList.contains('chat-panel-open')){ mlRemoveSelBtn(); return; }
   var fs = document.getElementById('toolFullscreen');
   if(fs && fs.style.display === 'block'){ mlRemoveSelBtn(); return; }
@@ -21384,6 +21420,13 @@ function mlSelectionHandler(){
 }
 document.addEventListener('mouseup', function(){ setTimeout(mlSelectionHandler, 60); });
 document.addEventListener('touchend', function(){ setTimeout(mlSelectionHandler, 180); }, {passive:true});
+/* [FIX 20261106c] 手机上手柄拖动调选区不会再触发 touchend，只有 selectionchange。
+   加一层防抖监听，保证「长按选好 → 拖动调整」之后按钮仍能出现/跟随位置。 */
+document.addEventListener('selectionchange', function(){
+  if(Date.now() < mlSelSuppressUntil) return;
+  clearTimeout(window.__mlSelChangeTimer);
+  window.__mlSelChangeTimer = setTimeout(mlSelectionHandler, 260);
+});
 document.addEventListener('mousedown', function(e){
   if(mlSelBtn && e.target !== mlSelBtn) mlRemoveSelBtn();
 });
