@@ -6642,7 +6642,10 @@ function normalizeEssayPapers(data){
       paperId:paper.paperId,
       paperName:name,
       paperDate:paper.paperDate||'',
-      year:getYear(paper.paperDate),
+      // [FIX 2026-11-07] 用题库给的考试年度 _year，别用 paperDate 的年份：
+      //   国考/京考/沪考前一年 12 月笔试，2024 卷的 paperDate 是 2023-11-26。
+      //   实测 841 卷 _year 与卷名年份 100% 一致。essayPaperFields() 仍以卷名为最终口径。
+      year:paper._year || getYear(paper.paperDate),
       province:extractProvince(name),
       topic:paper.topic||'其他',
       materials:materials,
@@ -7506,7 +7509,18 @@ function handleFiles(fileListArr){
           
           const obj={ id, fileName:file.name, zone, module, uploadTime:Date.now(), size:file.size, questions:questions, answered: rescuedAnswered || {} };
           db[zone][id]=obj;
-          index[zone].push({id, fileName:file.name, zone, module, uploadTime:obj.uploadTime, size:file.size, count:questions.length});
+          // [FIX 2026-11-07] 申论/综应的 questions 是**试卷壳数组**，questions.length 只是卷数。
+          //   index.count 会作为「视图未就绪」时的题数兜底（renderZoneStats / countZoneQuestions），
+          //   记成卷数会让申论分区短暂显示「32 题」而非真实的 142 题。这里按展开题数记账。
+          var __idxCount=questions.length;
+          if(isEssay){
+            __idxCount=0;
+            for(var __i=0;__i<questions.length;__i++){
+              var __pp=questions[__i];
+              if(__pp && Array.isArray(__pp.essayQuestions)) __idxCount+=__pp.essayQuestions.length;
+            }
+          }
+          index[zone].push({id, fileName:file.name, zone, module, uploadTime:obj.uploadTime, size:file.size, count:__idxCount});
           bumpDbEpoch();               // 题库内容变了：作废分区快照与展开缓存
           saveIndex(); saveFile(zone,id);
           // Stage B：新文件的 meta 立即建好（正文此刻已在内存里，build 成本只有一次遍历）。
@@ -7601,9 +7615,22 @@ function renderAll(){
     const tag = activeZone + '\u0001' + _dbEpoch;
     if(_renderAllViewRetry !== tag){
       _renderAllViewRetry = tag;
-      ensureZoneView(activeZone).then(function(){ renderAll(); });
+      ensureZoneView(activeZone).then(function(){
+        // [FIX 2026-11-07] 重入前必须复位标记。
+        //   原实现只置不清，同一 (zone, epoch) 的第二次「需要等视图」场景会直接跳过闸门，
+        //   拿空集合渲染 —— 申论/综应因此稳定显示 0 题：
+        //   导入 → 自动切到 sl（第 1 次，置标记并等视图，正常）；
+        //   用户再点一次「申论」→ switchZone 里 releasePreparedZone 丢掉 _prepFiles[sl]
+        //   ⇒ zoneViewReady 变 false，但标记仍是 'sl\x01N' ⇒ 不等视图、直接渲染空列表；
+        //   紧接着 switchZone 末尾的 ensureZoneView 把视图重建好了，却没人再渲染。
+        _renderAllViewRetry = null;
+        renderAll();
+      });
       return;
     }
+    // 已重入过一次仍未就绪（构建失败等）：本次不再等待，但必须复位，
+    // 否则该分区+该 epoch 永久卡在「跳过闸门」状态。
+    _renderAllViewRetry = null;
   }
   renderZoneTabs();
   renderZoneStats();
@@ -7621,14 +7648,25 @@ function renderAll(){
 // 却要把申论/综应整卷（含材料展开、真实题号推断）全部构造一遍 —— 纯浪费。
 function countZoneQuestions(zone){
   if(zone==='sl'||zone==='zy'){
-    var files=db[zone]||{}, n=0;
+    // [FIX 2026-11-07] ① 优先读视图记录：它是纯标量缓存，正文被 release 成壳（BODY_SHELL_MARK）
+    //   之后仍然完整保留 —— 原实现只数 db 里的 paper.essayQuestions，正文一释放就恒为 0，
+    //   于是「申论 · 0 题」既出现在分区标签，也出现在文件卡。
+    //   ② 视图未建时退回 db 正文；③ 两者都没有（启动第一帧）再退回 index.count 估算。
+    var view=_prepFiles[zone]||{};
+    var files=db[zone]||{}, n=0, seen=Object.create(null);
     Object.keys(files).forEach(function(id){
+      if(Array.isArray(view[id])){ n+=view[id].length; seen[id]=true; return; }
       var list=files[id]&&files[id].questions;
       if(!Array.isArray(list)) return;
+      seen[id]=true;
       for(var i=0;i<list.length;i++){
         var paper=list[i];
         if(paper && paper._essay && Array.isArray(paper.essayQuestions)) n+=paper.essayQuestions.length;
       }
+    });
+    (index[zone]||[]).forEach(function(m){
+      if(!m || seen[String(m.id)]) return;
+      n += Number(m.count)||0;
     });
     return n;
   }
@@ -7722,6 +7760,9 @@ function releasePreparedZone(zone){
   if(!zone) return;
   if(_prepFiles[zone]) _prepFiles[zone] = {};
   if(_snap.zone === zone) dropSnapshot();
+  // [FIX 2026-11-07] 视图被整份丢弃 ⇒ 该分区的「renderAll 闸门已重试过」标记必须一起作废，
+  //   否则下一次进入该分区时闸门失效，会用空集合渲染（申论 0 题的成因之一）。
+  _renderAllViewRetry = null;
 }
 
 // —— 派生标量：全部「首次用到才算、算完挂在副本上」，既不做无谓的提前计算，
@@ -8349,8 +8390,26 @@ function essayPaperFields(zone, paper){
     ? ((byNameTopic && byNameTopic!=='其他') ? byNameTopic
         : ((storedTopic && storedTopic!=='综应') ? storedTopic : (byNameTopic||storedTopic||'')))
     : storedTopic;
+  // [FIX 2026-11-07] 年份必须「卷名优先」，不能先看 paper.year / paperDate。
+  //   原因：申论库里 125 卷的 paperDate 与考试年度不同 —— 国考/京考/沪考都是**前一年 12 月笔试**
+  //   （如「2024年国家公考《申论》题（行政执法）」paperDate=2023-11-26）。
+  //   原实现 year = paper.year || paper._year || getYear(paperDate)：
+  //     · normalizeEssayPapers 写入的 paper.year 就是 paperDate 的年份 ⇒ 2023；
+  //     · getYear('') 返回字符串「未知」（truthy）⇒ 无日期卷全落到「未知」桶。
+  //   于是筛 2023 会命中 2024 国考卷，卡片又显示「2024年国家公考…」⇒ 同屏两个年份。
+  //   实测 841 卷中 _year 与卷名年份 100% 一致，卷名年份是最可靠的口径。
+  var nameYear = name ? (zone==='zy' ? extractYearForZy(name) : extractYear(name)) : 0;
+  var yearText = nameYear ? String(nameYear) : '';
+  if(!yearText){
+    var rawYear = String(paper.year || paper._year || '');
+    if(rawYear && rawYear!=='未知' && rawYear!=='undefined') yearText = rawYear;
+  }
+  if(!yearText){
+    var dateYear = getYear(paper.paperDate);
+    if(dateYear && dateYear!=='未知') yearText = dateYear;
+  }
   return {
-    year: paper.year||paper._year||getYear(paper.paperDate)||'',
+    year: yearText,
     topic: topic,
     province: prov
   };
