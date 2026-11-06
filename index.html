@@ -8677,25 +8677,25 @@ function filterBaseSignature(){
        + (filterState.year||'all') + '\u0001' + (filterState.province||'all') + '\u0001' + (filterState.source||'all');
 }
 // 一级模块统计（模块下拉框的「(N题)」计数）缓存。
-//   · mk 分支的模块统计**只用 q.bigCategory**，与任何筛选条件都无关 ⇒ 只需 (分区 + 题库版本)；
-//   · gk/sy 分支的模块统计基于 getFilterBaseQuestions() 的结果 ⇒ 用同一套签名。
+//   · mk 分支的模块名取 q.bigCategory，gk/sy/gj 取 qzModuleOfBar；
+//   · [FIX 2026-11-07] 两者都基于 getFilterCountBaseQuestions()（= base + 状态 + 正确率），
+//     以前 mk 分支数的是「分区全量」，选年份/省份/只显示未做时模块数字纹丝不动。
 //   旧实现每次 updateSubTypeFilter 都要对整分区跑一遍 normalizeModuleName
 //   （采样实测 mk 61180 题一次 ≈ 18ms，且 refreshFilterCounters 与 renderModuleBar
-//    会各触发一次，同一次操作里白白算两遍）。
+//    会各触发一次，同一次操作里白白算两遍 ⇒ 保留记忆化）。
 var _moduleStatsMemo = { sig: null, stats: null };
 function getModuleStatsForBar(){
   var isMk = (activeZone === 'mk');
-  var sig = (isMk ? 'mk\u0001' + _dbEpoch : 'z\u0001' + filterBaseSignature());
+  var sig = (isMk ? 'mk' : 'z') + '\u0001' + filterCountSignature();
   if(_moduleStatsMemo.sig === sig && _moduleStatsMemo.stats) return Object.assign({}, _moduleStatsMemo.stats);
   var stats = {};
+  var qs0 = getFilterCountBaseQuestions();
   if(isMk){
-    var all = getZoneQuestions(activeZone, '__all__');
-    for(var i=0;i<all.length;i++){
-      var normalized = qzModule(all[i]);
+    for(var i=0;i<qs0.length;i++){
+      var normalized = qzModule(qs0[i]);
       stats[normalized] = (stats[normalized] || 0) + 1;
     }
   } else {
-    var qs0 = getFilterBaseQuestions();
     for(var j=0;j<qs0.length;j++){
       var module = qzModuleOfBar(qs0[j]);
       if(module) stats[module] = (stats[module] || 0) + 1;
@@ -8761,6 +8761,34 @@ function getFilterBaseQuestions(){
   return qs.slice();
 }
 
+/* ===== [FIX 2026-11-07] 分面计数基数（faceted count）=====
+   口径：「模块 / 一级题型 / 细分题型」这三个下拉里每个选项后面的 (N题)，
+         = 应用【除该层级自身以外的全部筛选】后的题数。
+   之前这三个下拉只套了「关键词 + 年份 + 省份 + 来源」（getFilterBaseQuestions），
+   完全不含「做题状态 / 正确率」⇒ 选「只显示未做」时列表题数变了、下拉数字不变，
+   两边对不上；模块条上的「N 题」同理。
+   三层级的级联（模块 → 题型 → 细分）仍由调用方各自处理，这里只补上非层级维度。
+   ⚠ 状态 / 正确率的判断**必须**走 qsPassStatus / qsPassRatio 单点实现，
+     不许在别处另写一份（历史上「统计用一套、筛选用另一套」曾导致误报「148 题点进去 0 题」）。 */
+var _gfcMemo = { sig: null, arr: null };
+function filterCountSignature(){
+  var rb = ratioRangeBounds();
+  return filterBaseSignature() + '\u0001' + (filterState.status || 'all') + '\u0001'
+       + rb[0] + '-' + rb[1] + '\u0001' + (filterState.ratioRange || 'all');
+}
+function getFilterCountBaseQuestions(){
+  var sig = filterCountSignature();
+  if(_gfcMemo.sig === sig && _gfcMemo.arr) return _gfcMemo.arr.slice();
+  var qs = getFilterBaseQuestions();
+  var rb = ratioRangeBounds();
+  if((filterState.status && filterState.status !== 'all') || rb[0] > 0 || rb[1] < 100
+     || getRatioRangeDef(filterState.ratioRange)){
+    qs = qs.filter(function(q){ return qsPassStatus(q) && qsPassRatio(q); });
+  }
+  _gfcMemo.sig = sig; _gfcMemo.arr = qs;
+  return qs.slice();
+}
+
 function renderModuleBar(){
   if(activeZone==='sl'||activeZone==='zy'){
     moduleBar.innerHTML='';
@@ -8780,7 +8808,8 @@ function renderModuleBar(){
   [yearFilter,provinceFilter,sourceFilter,statusFilter,sortFilter,moduleFilter,subTypeFilter,leafTypeFilter].forEach(function(element){ if(element) element.style.display=''; });
   if(searchBox) searchBox.style.display='';
   if(activeZone==='ms'){ moduleBar.innerHTML=''; return; }
-  const qs = getFilterBaseQuestions();
+  // [FIX 2026-11-07] 模块条上的「N 题」也要跟随「做题状态 / 正确率」筛选
+  const qs = getFilterCountBaseQuestions();
   const counts = { all: qs.length };
 
   if (activeZone === 'sl') {
@@ -9450,6 +9479,43 @@ function getSpecialQuestionType(question){
   if(Array.isArray(question.keypoints) && question.keypoints[0]) return question.keypoints[0].name||'';
   return '未分类';
 }
+// ===== [FIX 2026-11-07] 「做题状态 / 正确率」判断的唯一实现 =====
+//   getFiltered（真正筛题）与 getFilterCountBaseQuestions（下拉题数）共用这两个函数。
+//   任何一处要加新的状态值，只改这里，两边自动同步。
+function qsPassStatus(q){
+  const st = filterState.status;
+  if(!st || st === 'all') return true;
+  const ic = isAnsweredCorrect(q);
+  if(st === 'unanswered') return ic === null;
+  if(st === 'answered')   return ic !== null;
+  if(st === 'wrong')      return ic === false;
+  if(st === 'correct')    return ic === true;
+  if(st === 'favorite')   return isFavorite(q._key);
+  if(st === 'note')       return getQuestionNoteCount(q._key) > 0;
+  if(st === 'commented')  return !!q._hasComment;
+  return true;
+}
+var _ratioBoundsMemo = { sig: null, min: 0, max: 100 };
+function ratioRangeBounds(){
+  var sig = (filterState.minRatio===''?'':filterState.minRatio) + '|' + (filterState.maxRatio===''?'':filterState.maxRatio);
+  if(_ratioBoundsMemo.sig === sig) return [_ratioBoundsMemo.min, _ratioBoundsMemo.max];
+  let min = filterState.minRatio === '' ? 0 : parseFloat(filterState.minRatio);
+  let max = filterState.maxRatio === '' ? 100 : parseFloat(filterState.maxRatio);
+  if(isNaN(min)) min = 0; if(isNaN(max)) max = 100;
+  if(min > max){ const t = min; min = max; max = t; }
+  _ratioBoundsMemo = { sig: sig, min: min, max: max };
+  return [min, max];
+}
+function qsPassRatio(q){
+  const b = ratioRangeBounds();
+  if(b[0] > 0 || b[1] < 100){
+    const r = Number(q.correctRatio || 0);
+    if(!(r >= b[0] && r <= b[1])) return false;
+  }
+  const def = getRatioRangeDef(filterState.ratioRange);
+  if(def && !def.test(qzRatioVal(q))) return false;
+  return true;
+}
 // skipSort=true 时只做筛选不做排序（供「统计题数」这类只关心集合、不关心顺序的场景使用）
 function getFiltered(skipSort){
   let qs=getZoneQuestions(activeZone, '__all__');
@@ -9533,28 +9599,12 @@ function getFiltered(skipSort){
     qs=qs.filter(function(q){ return (q.source || '').includes(sourceValue); });
   }
 
-  // 做题状态
-  const st=filterState.status;
-  if(st!=='all'){
-    qs=qs.filter(q=>{ const ic=isAnsweredCorrect(q);      
-      if(st==='unanswered') return ic===null;
-      if(st==='answered')   return ic!==null;
-      if(st==='wrong')      return ic===false;
-      if(st==='correct')    return ic===true;
-      if(st==='favorite')   return isFavorite(q._key);
-      if(st==='note')       return getQuestionNoteCount(q._key) > 0;
-      if(st==='commented')  return !!q._hasComment;
-      return true; });
-  }
-  let min=filterState.minRatio===''?0:parseFloat(filterState.minRatio);
-  let max=filterState.maxRatio===''?100:parseFloat(filterState.maxRatio);
-  if(isNaN(min)) min=0; if(isNaN(max)) max=100;
-  if(min>max){ const t=min; min=max; max=t; }
-  if(min>0||max<100) qs=qs.filter(q=>{ const r=Number(q.correctRatio||0); return r>=min&&r<=max; });
+  // 做题状态（判断逻辑在 qsPassStatus，与下拉题数统计共用同一份实现）
+  if(filterState.status && filterState.status!=='all') qs=qs.filter(qsPassStatus);
 
-  // 正确率区间筛选：与上面的手动输入范围【叠加生效】（取交集）
-  const ratioRangeDef=getRatioRangeDef(filterState.ratioRange);
-  if(ratioRangeDef) qs=qs.filter(function(q){ return ratioRangeDef.test(qzRatioVal(q)); });
+  // 正确率：手动输入的区间 + 正确率区间下拉【叠加生效】（取交集），判断逻辑在 qsPassRatio
+  const _rb=ratioRangeBounds();
+  if(_rb[0]>0 || _rb[1]<100 || getRatioRangeDef(filterState.ratioRange)) qs=qs.filter(qsPassRatio);
 
   // ====== 排序逻辑 ======
   // [FIX 20260930] 排序与区间彻底解耦：sortBy 只承载 default/ratioDesc/ratioAsc；
@@ -14678,7 +14728,10 @@ sortFilter.addEventListener('change', ()=>{
     // 用户选的是排序 → 只动 sortBy，区间字段保持
     filterState.sortBy = v;
   }
-  currentPage=1; saveView(); renderQuestions();
+  currentPage=1; saveView();
+  // [FIX 2026-11-07] 区间会改变题数，模块条与三个题型下拉的 (N题) 必须跟着重算
+  refreshFilterCounters();
+  renderQuestions();
 });
 function onRatioInput(){
   let mn=minRatioInput.value.trim(), mx=maxRatioInput.value.trim();
@@ -14686,7 +14739,10 @@ function onRatioInput(){
   if(mx!==''&&!isNaN(parseFloat(mx))) mx=Math.max(0,Math.min(100,parseFloat(mx)));
   filterState.minRatio=(mn===''||isNaN(mn))?'':String(mn);
   filterState.maxRatio=(mx===''||isNaN(mx))?'':String(mx);
-  currentPage=1; saveView(); renderQuestions();
+  currentPage=1; saveView();
+  // [FIX 2026-11-07] 正确率范围同样会改变题数，下拉的 (N题) 要一起刷新
+  refreshFilterCounters();
+  renderQuestions();
 }
 minRatioInput.addEventListener('input', onRatioInput);
 maxRatioInput.addEventListener('input', onRatioInput);
@@ -16779,7 +16835,9 @@ window.updateSubTypeFilter = function() {
     return;
   }
 
-  var qs = getFilterBaseQuestions();
+  // [FIX 2026-11-07] 三个题型下拉的 (N题) 必须跟随「做题状态 / 正确率」，
+  //   否则选「只显示未做」后列表题数变了、下拉数字不变。
+  var qs = getFilterCountBaseQuestions();
 
   if (activeZone === 'sl') {
     var topicStats = {};
