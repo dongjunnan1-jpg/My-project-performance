@@ -10910,6 +10910,8 @@ function getBestChineseVoice(){
 function startSpeaking(questionKey, text){
   try{
     if(!window.speechSynthesis || typeof window.SpeechSynthesisUtterance!=='function') return;
+    warmUpSpeechVoices();   /* [FIX 2026-11-07] 真正要朗读时才预热语音引擎 */
+    ensurePlaybackAudioSession();   /* [FIX 2026-11-07] 出声时才切音频会话 */
     var utterance=new SpeechSynthesisUtterance(text);
     utterance.lang='zh-CN';
     utterance.rate=1.0;
@@ -10956,14 +10958,21 @@ function speakQuestion(questionKey, button){
   startSpeaking(questionKey,text);
 }
 
+// [FIX 2026-11-07] 语音引擎改为「按需预热」，不再在脚本加载时调用。
+//   原来这里直接 warmUpSpeechVoices() ⇒ 页面一打开就调 speechSynthesis.getVoices()，
+//   浏览器此时会初始化系统 TTS 引擎并切换音频会话，把用户正在播放的音乐/播客打断一下
+//   （「打开本程序，别的软件的音乐会暂停一下」）。现在只在真正要朗读时预热，
+//   幂等，多次调用无副作用。
+var _speechWarmed = false;
 function warmUpSpeechVoices(){
+  if(_speechWarmed) return;
+  _speechWarmed = true;
   try{
     if(!window.speechSynthesis) return;
     window.speechSynthesis.getVoices();
     window.speechSynthesis.onvoiceschanged=function(){ window.speechSynthesis.getVoices(); };
   }catch(error){}
 }
-warmUpSpeechVoices();
 
 // ============================================================
 // 复盘系统：入口 / 渲染 / 作答
@@ -18437,6 +18446,7 @@ function getSoundContext(needResume) {
   // 里每次点击都调用，导致用户一操作本页就打断其他 App 的音频。
   // 现在：只有真正要出声的调用点（playSound / createNoiseBuffer / 番茄钟提示音）
   // 才传 needResume=true；纯唤醒/状态查询场景不再 resume。
+  if (needResume) ensurePlaybackAudioSession();   /* [FIX 2026-11-07] 出声时才切音频会话 */
   var AC = window.AudioContext || window.webkitAudioContext;
   if (!soundCtx || soundCtx.state === 'closed') {
     try {
@@ -18458,12 +18468,21 @@ function getSoundContext(needResume) {
   return soundCtx;
 }
 
-// iOS 静音键绕过：让 Web Audio 不受响铃/静音拨片控制
-try {
-  if (navigator.audioSession && 'type' in navigator.audioSession) {
-    navigator.audioSession.type = 'playback';
-  }
-} catch(e) {}
+// iOS 静音键绕过：让 Web Audio 不受响铃/静音拨片控制。
+// [FIX 2026-11-07] 原来这段在**脚本加载时**无条件执行。navigator.audioSession.type='playback'
+//   在 iOS / Safari 上会把整个页面的音频会话切成「非混音」类别，页面一加载就中断
+//   用户正在播放的音乐/播客（表现：打开本程序，别的软件的声音会停一下）。
+//   改成「真正要出声时才设置」，且只设一次；不播放就永远不碰音频会话。
+var _playbackSessionSet = false;
+function ensurePlaybackAudioSession(){
+  if(_playbackSessionSet) return;
+  _playbackSessionSet = true;
+  try {
+    if (navigator.audioSession && 'type' in navigator.audioSession) {
+      navigator.audioSession.type = 'playback';
+    }
+  } catch(e) {}
+}
 
 function createNoiseBuffer(type) {
   var c = getSoundContext(true);   // 真正要出声，才 resume
@@ -19011,6 +19030,7 @@ function toggleCustomSound(id) {
 
 function playCustomSound(sound) {
   try {
+    ensurePlaybackAudioSession();   /* [FIX 2026-11-07] 出声时才切音频会话 */
     if (!customSoundCtx) {
       customSoundCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
@@ -22504,6 +22524,14 @@ window.mlImport = async function(input){
       }
       currentPage = 1;
       try{ saveView(); }catch(e){}
+      /* [FIX 2026-11-07] 这个面板是自绘的，**不会**触发原生 #sortFilter 的 change，
+         所以昨晚加在 change 上的 refreshFilterCounters() 对用户点击无效：
+         选了正确率区间列表变了，但「全部模块 / 全部题型 / 全部细分」的 (N题) 一动不动，
+         必须再点一下「全部题型」触发它自己的 onchange 才刷新。
+         区间会改变题数（排序不会），所以只在 range 组刷新计数，避免排序点击时白重建模块条。 */
+      if(g !== 'sort'){
+        try{ if(typeof refreshFilterCounters === 'function') refreshFilterCounters(); }catch(e){}
+      }
       try{ renderQuestions(); }catch(e){}
       try{ refreshRatioRangeOptions(); }catch(e){}
       syncPanel();
@@ -23497,6 +23525,8 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
       enReaderToast('当前浏览器不支持 Web Speech API');
       return;
     }
+    warmUpSpeechVoices();   /* [FIX 2026-11-07] 按需预热 */
+    ensurePlaybackAudioSession();   /* [FIX 2026-11-07] 按需切换音频会话 */
     var u = new SpeechSynthesisUtterance(word || '');
     u.lang = 'en-US';
     window.speechSynthesis.cancel();
@@ -23889,6 +23919,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
   function unlockAudio(){
     if(audioUnlocked) return;
     audioUnlocked = true;                        // 先置位：连点不会重复解锁（重复设 src 会打断正在播的音频）
+    ensurePlaybackAudioSession();                /* [FIX 2026-11-07] 用户点朗读时才切音频会话 */
     var a = voiceAudioEl();
     function kick(){
       try{
@@ -24159,6 +24190,8 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
         reject(new Error('当前浏览器不支持语音合成'));
         return;
       }
+      warmUpSpeechVoices();   /* [FIX 2026-11-07] 按需预热 */
+      ensurePlaybackAudioSession();   /* [FIX 2026-11-07] 按需切换音频会话 */
       var u = new SpeechSynthesisUtterance(text);
       u.lang = 'zh-CN';
       u.rate = 1.0;
