@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="qz-booting">
 <head>
 <meta charset="UTF-8">
 <link rel="icon" type="image/svg+xml" href="icon.svg">
@@ -62,6 +62,64 @@
     document.documentElement.setAttribute('data-skin',skin);
   }catch(e){}
 })();
+</script>
+<style>
+/* ============================================================
+   [FIX 2026-11-07] 首屏启动遮罩（消除「刷新时布局乱跳」）
+   背景：页面外壳是静态 HTML，但分区标签、分区统计、筛选栏、模块条、
+     题目列表全部由 JS 在 init() 里逐步拼出来。init 要先开 IndexedDB、
+     建轻量壳、物化作答状态，耗时随库大小增长（手机上尤其明显）。
+     这段时间用户看到的是「半成品」：总 0 题、分区栏空白、
+     筛选栏空着、控件错位 —— 刷新完成后才恢复正常。
+   做法：在第一次 renderAll() 之前，把 body 直接子元素整体 visibility:hidden
+     （保留布局，不外移、不影响任何尺寸测量），只显示一张与主题同色的启动页；
+     第一次渲染完成后（renderAll + renderProgressPanel + 位置恢复）再移除。
+     · 只在 <html class="qz-booting"> 时生效，撤掉后零残留、无样式重排；
+     · 兜底：head 里的 qzBootDone 带 12s 超时 + 未捕获异常即刻撤罩，
+       异常也不会长期卡在「正在加载」。
+   ============================================================ */
+html.qz-booting body > *:not(#qzBootMask){ visibility: hidden !important; }
+#qzBootMask{
+  position: fixed; inset: 0; z-index: 2147483000;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  background: var(--bg, #f0f7ff);
+  color: var(--deep, #2c5f8a);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+html:not(.qz-booting) #qzBootMask{ display: none !important; }
+#qzBootMask .qz-boot-logo{
+  font-family: "Snell Roundhand", "Apple Chancery", "Brush Script MT", "Segoe Script", "Lucida Handwriting", cursive;
+  font-size: 40px; line-height: 1.1; color: var(--main, #3a7ab0);
+}
+#qzBootMask .qz-boot-spin{
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 3px solid var(--mid, #8fc1ed); border-top-color: var(--main, #3a7ab0);
+  animation: qzBootSpin .8s linear infinite;
+}
+#qzBootMask .qz-boot-tip{ font-size: 13px; opacity: .72; letter-spacing: .5px; }
+@keyframes qzBootSpin{ to{ transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce){ #qzBootMask .qz-boot-spin{ animation-duration: 2.4s; } }
+</style>
+<script>
+/* 启动遮罩的收尾开关。定义得足够早，任何一条启动路径都能调用到。
+   · 稳态下 qz-booting 已移除 ⇒ 再调无副作用（幂等）；
+   · 12s 兜底：init 里若有 await 永久挂住（例如 IndexedDB 被占），
+     也不会让用户一直对着启动页。 */
+window.qzBootDone = function(){
+  try{
+    var de = document.documentElement;
+    if(!de || !de.classList || !de.classList.contains('qz-booting')) return;
+    de.classList.remove('qz-booting');
+    var m = document.getElementById('qzBootMask');
+    if(m && m.parentNode) m.parentNode.removeChild(m);
+  }catch(e){}
+};
+setTimeout(function(){ window.qzBootDone(); }, 12000);
+/* 启动期抛出未捕获异常时立刻撤罩：宁可露出半成品，也不要一直停在「正在加载」。 */
+window.addEventListener('error', function(ev){
+  if(ev && ev.message) setTimeout(function(){ window.qzBootDone(); }, 600);
+}, false);
 </script>
 <script>
 /* ===== [UI 2026-10-21b] 筛选栏 SVG 图标跟随主题色 =====
@@ -3342,6 +3400,12 @@ body.skin-dark .en-pagination button.active {
 </style>
 </head>
 <body class="pc-mode">
+<!-- 首屏启动遮罩：第一次渲染完成前挡住「半成品」布局（见 head 里的 #qzBootMask 样式与 qzBootDone） -->
+<div id="qzBootMask" aria-hidden="true">
+  <div class="qz-boot-logo">Helium</div>
+  <div class="qz-boot-spin"></div>
+  <div class="qz-boot-tip">正在加载题库…</div>
+</div>
 <!-- 自定义确认弹窗（替代原生 confirm，避免 iOS 独立模式/内置浏览器禁用对话框导致删除等操作失效） -->
 <div id="confirmOverlay" class="confirm-overlay">
   <div class="confirm-box">
@@ -4303,7 +4367,8 @@ function initDrawer() {
   if (APP_MODE === 'english') {
     if (exam) exam.style.display = 'none';
     if (english) english.style.display = 'block';
-    renderEnglishCenter().catch(function(e){ console.error('渲染英语中心失败:', e); });
+    /* [FIX 2026-11-07] 把首渲染的 Promise 暴露出来，供 init 的英语分支等待后撤启动遮罩 */
+    window.__enRenderPromise = renderEnglishCenter().catch(function(e){ console.error('渲染英语中心失败:', e); });
   } else if (english) {
     english.style.display = 'none';
   }
@@ -7625,6 +7690,9 @@ function renderAll(){
         //   紧接着 switchZone 末尾的 ensureZoneView 把视图重建好了，却没人再渲染。
         _renderAllViewRetry = null;
         renderAll();
+        /* [FIX 2026-11-07] 首帧落在闸门后面时（冷启动大库常见），
+           由这次补渲染负责撤启动遮罩，否则会露出空列表/总 0 题。 */
+        if(window.__qzBootAfterView){ window.__qzBootAfterView = false; window.qzBootDone(); }
       });
       return;
     }
@@ -7673,11 +7741,25 @@ function countZoneQuestions(zone){
   return (index[zone]||[]).reduce(function(s,m){ return s+(m.count||0); }, 0);
 }
 
+var _zoneTabsScrolledFor = null;
 function renderZoneTabs(){
   zoneTabs.innerHTML = ZONES.map(z=>{
     const total=countZoneQuestions(z.id);
     return `<button class="zone-tab ${z.id===activeZone?'active':''}" data-zone="${z.id}" onclick="switchZone('${z.id}')">${z.name}<span class="z-count">${total} 题</span></button>`;
   }).join('');
+  /* [FIX 2026-11-07] 重建 innerHTML 会把横向滚动位置打回 0，
+     手机窄屏上当前分区（如申论）被推到可视区外，看起来像「分区没选上/布局乱」。
+     仅在分区变化时把活动标签居中（不额外改变页面纵向滚动）。
+     注意：此函数每次 renderAll 都会跑，所以用 _zoneTabsScrolledFor 记住已处理的分区，
+     避免用户手动横滑标签栏后被强行拉回。 */
+  if(_zoneTabsScrolledFor !== activeZone){
+    const active = zoneTabs.querySelector('.zone-tab.active');
+    if(active && zoneTabs.scrollWidth > zoneTabs.clientWidth + 1){
+      const target = active.offsetLeft - (zoneTabs.clientWidth - active.offsetWidth) / 2;
+      zoneTabs.scrollLeft = Math.max(0, Math.min(target, zoneTabs.scrollWidth - zoneTabs.clientWidth));
+    }
+    _zoneTabsScrolledFor = activeZone;
+  }
 }
 
 function getQuestionCorrectRatio(q){
@@ -16644,6 +16726,23 @@ async function openChatHistory() {
 // ============================================================
 // 初始化（异步：开 IDB → 迁移旧 localStorage → 加载全部数据 → 渲染）
 (async function init(){
+  // ============================================================
+  // [FIX 2026-11-07] 必须先等 DOM 解析完再开工。
+  //   这个 init 在**第一个**脚本块里，而 stopAllMianShiRecordings() 等一批函数
+  //   定义在**最后一个**脚本块（同页共 11 个 script 块）。函数声明只在所属脚本块
+  //   执行时才挂到全局。慢网 / 首屏 1.4MB HTML 分块到达时，init 里的
+  //   `await idbOpen()` 可能在后面的脚本块还没执行前就返回，于是 renderAll →
+  //   renderQuestions → stopAllMianShiRecordings() 抛 ReferenceError，
+  //   整个渲染中断：分区统计已经写进 DOM（「总 142 题」），但题目列表永远是空的。
+  //   实测（CDP 限速 150KB/s，申论 142 题）：刷新后 content.innerHTML 恒为 0，
+  //   且不会自愈；不限速时不复现。
+  //   DOMContentLoaded 必然晚于所有同步脚本块 ⇒ 等它最稳，且启动遮罩期间无感。
+  // ============================================================
+  if(document.readyState === 'loading'){
+    await new Promise(function(res){
+      document.addEventListener('DOMContentLoaded', function(){ res(); }, {once:true});
+    });
+  }
   try{ await idbOpen(); }catch(e){ console.error('IndexedDB 打开失败:', e); }
   try{ await enMigrateLegacyVocab(); }catch(e){ console.error('英语词库迁移失败:', e); }
   initDrawer();  // 无条件初始化抽屉（内部会判断 APP_MODE）
@@ -16651,6 +16750,10 @@ async function openChatHistory() {
   const mode = localStorage.getItem('app_mode');
   if (mode === 'english') {
     // 英语模式：只需加载英语相关数据，不加载公考数据
+    // [FIX 2026-11-07] 等英语中心的首次渲染落地再撤启动遮罩，
+    //   否则遮罩撤掉时会露出还没渲染的空容器（同样是"布局乱"）。
+    try{ await window.__enRenderPromise; }catch(e){}
+    window.qzBootDone();
     return;
   }
   try{ await idbOpen(); }catch(e){ console.error('IndexedDB 打开失败:', e); }
@@ -17288,12 +17391,36 @@ if (window.renderQuestions) window.renderQuestions();
           }
           showStudyPositionRestored();
           restoredStudyPosition=null;
+          window.qzBootDone();   /* [FIX 2026-11-07] 位置恢复完毕，此时再露首屏 */
         });
       });
     }, 300);
   }
   renderProgressPanel();
   setInterval(renderProgressPanel, 60000);   // 每分钟刷新倒计时与每日状态
+  /* [FIX 2026-11-07] 首帧渲染完成 → 撤掉启动遮罩。
+     有「恢复做题位置」时不能现在撤：那段代码在 300ms 后会 scrollIntoView，
+     遮罩还在的话用户看不到这次跳动。改由那段自己在滚动完成后调用。
+     视图还没建好（首帧走了闸门）时也不能撤：等闸门那次补渲染撤。
+     另外「显示未做/错题按时间排」等路径的 renderQuestions 是异步的，
+     renderAll 返回时列表可能还是空的 ⇒ 等内容真的落进 DOM 再撤（最多 2s）。 */
+  if(!restoredStudyPosition){
+    if(typeof zoneViewReady === 'function' && !zoneViewReady(activeZone)){
+      window.__qzBootAfterView = true;
+    }else{
+      (function revealWhenListReady(){
+        var waited = 0;
+        (function tick(){
+          var hasData = !!(index[activeZone] && index[activeZone].length);
+          var box = document.getElementById('content');
+          var filled = !!(box && box.children && box.children.length);
+          if(!hasData || filled || waited >= 2000){ window.qzBootDone(); return; }
+          waited += 60;
+          setTimeout(tick, 60);
+        })();
+      })();
+    }
+  }
   dismissConfirmOverlay();
   window.addEventListener('load', dismissConfirmOverlay, {once:true});
   setTimeout(function(){
