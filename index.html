@@ -5277,6 +5277,7 @@ function saveQuestionState(zone, fileId, key, value){
   if(!f) return Promise.resolve(false);
   if(!f.answered || typeof f.answered!=='object') f.answered = {};
   f.answered[key] = value;
+  markAnswerStateChanged();   /* [FIX 2026-11-08] 答题状态变了 ⇒ 分面计数缓存必须失效 */
   return saveQuestionStates(zone, fileId, f.answered);
 }
 // 单题撤销（考试模式取消选择用）
@@ -5284,6 +5285,7 @@ function removeQuestionState(zone, fileId, key){
   const f = db[zone] && db[zone][fileId];
   if(!f) return Promise.resolve(false);
   if(f.answered && typeof f.answered==='object') delete f.answered[key];
+  markAnswerStateChanged();
   return saveQuestionStates(zone, fileId, f.answered || {});
 }
 // 删除整个 file 的 state（迁移回滚 / 测试用；删掉后下次会重新从 file.answered 派生）
@@ -8842,6 +8844,31 @@ function showPrompt(message, defaultValue, onSubmit){
 //   返回副本同时也修掉了旧行为的一个隐患：旧实现在无任何筛选时返回的是
 //   分区快照数组本身，调用方一旦就地 sort 会把快照带歪。
 var _gfbMemo = { sig: null, arr: null };
+/* ===== [FIX 2026-11-08] 答题状态版本号 + 答题后的分面计数刷新 =====
+   用户反馈：做完一道题后，题型 / 模块下拉里的「(N题)」不跟着变，
+   必须再点一下筛选才更新（例：0~40% 区间本来 2 题，做掉 1 题应显示 1 题）。
+
+   两个独立原因，缺一不可：
+   ① **没有任何地方在答题后刷新计数** —— selectOption / submitMultipleChoice /
+      selectJudgeOption 结束时只调了 renderProgressPanel / renderZoneStats /
+      updateWrongCount，没调 refreshFilterCounters()。
+   ② **就算调了也不会变** —— 分面计数是签名级记忆化的，而 filterCountSignature()
+      只包含「分区 + 题库版本 + 搜索 + 年份 + 省份 + 来源 + 状态 + 区间」，
+      完全不包含「这题答没答」，答完题签名不变 ⇒ 缓存命中 ⇒ 返回旧数字。
+
+   做法：加一个只增不减的 _answerEpoch，任何写答题状态的入口都 +1，
+   并入 filterCountSignature() —— 这样两处记忆化（_gfcMemo / _moduleStatsMemo）
+   会自动失效，不必手动清缓存，也不会漏掉任何新增的筛选维度。 */
+var _answerEpoch = 0;
+var _fcRefreshRaf = 0;
+function markAnswerStateChanged(){ _answerEpoch = (_answerEpoch || 0) + 1; }   /* 防御：早期脚本块先调到时也不出 NaN */
+function scheduleFilterCountersRefresh(){
+  if(_fcRefreshRaf) return;                    /* 同一帧内连答多题只重算一次 */
+  _fcRefreshRaf = requestAnimationFrame(function(){
+    _fcRefreshRaf = 0;
+    try{ refreshFilterCounters(); }catch(e){}
+  });
+}
 function filterBaseSignature(){
   // getFilterBaseQuestions 的全部输入 = 分区 + 题库版本 + 搜索词 + 年份 + 省份 + 来源
   return activeZone + '\u0001' + _dbEpoch + '\u0001' + (filterState.search||'') + '\u0001'
@@ -8945,7 +8972,8 @@ var _gfcMemo = { sig: null, arr: null };
 function filterCountSignature(){
   var rb = ratioRangeBounds();
   return filterBaseSignature() + '\u0001' + (filterState.status || 'all') + '\u0001'
-       + rb[0] + '-' + rb[1] + '\u0001' + (filterState.ratioRange || 'all');
+       + rb[0] + '-' + rb[1] + '\u0001' + (filterState.ratioRange || 'all')
+       + '\u0001' + _answerEpoch;   /* 答题状态一变签名就变：否则做完题计数缓存命中，数字不动 */
 }
 function getFilterCountBaseQuestions(){
   var sig = filterCountSignature();
@@ -12044,6 +12072,7 @@ function selectOption(key, letter, event){
   renderProgressPanel();
   renderZoneStats();
   updateWrongCount();
+  scheduleFilterCountersRefresh();   /* [FIX 2026-11-08] 答题后题型/模块下拉的题数当场跟着变 */
 }
 function submitMultipleChoice(key){
   const item=filteredQuestions.find(q=>q._key===key);
@@ -12130,6 +12159,7 @@ function submitMultipleChoice(key){
   renderProgressPanel();
   renderZoneStats();
   updateWrongCount();
+  scheduleFilterCountersRefresh();   /* [FIX 2026-11-08] 多选题交卷后同样立即刷新题数 */
 }
 
 function goPage(p){ const total=Math.ceil(filteredQuestions.length/PAGE_SIZE); if(p<1||p>total) return; stopSpeaking(); currentPage=p; const rendered=renderQuestions(); if(rendered&&typeof rendered.then==='function') rendered.then(scrollToFirstQuestion); else scrollToFirstQuestion(); }
@@ -12238,6 +12268,7 @@ function resetProgress(){
     // Step 1：清空进度写的是「空 state」而不是删 state 键。
     //   若删键，下次启动会因为 state 缺失而回退去读 file.answered（旧快照）⇒ 已清空的进度复活。
     Object.values(db[activeZone]).forEach(f=>{ f.answered={}; saveQuestionStates(activeZone, f.id, {}); });
+    markAnswerStateChanged();   /* [FIX 2026-11-08] 清空进度也算答题状态变化，否则计数缓存会返回旧数字 */
     timerData={answered:0,totalSec:0,startedAt:0,questionStart:0};
     saveTimerData();
     if (typeof updateSidebarTimer === 'function') updateSidebarTimer();
@@ -21563,6 +21594,7 @@ function selectJudgeOption(key, value){
   if(file){
     if(!file.answered) file.answered = {};
     file.answered[key] = value;
+    try{ markAnswerStateChanged(); }catch(e){}   /* [FIX 2026-11-08] 判断题不走 saveQuestionState，单独标记 */
     saveFile(activeZone, item._fileId);
   }
   var jc = extractJudgeCorrect(item);
@@ -21609,6 +21641,7 @@ function selectJudgeOption(key, value){
   try{ renderZoneStats(); }catch(e){}
   try{ renderProgressPanel(); }catch(e){}
   try{ updateWrongCount(); }catch(e){}
+  try{ scheduleFilterCountersRefresh(); }catch(e){}   /* [FIX 2026-11-08] 判断题作答后也刷新题数 */
 }
 
 function enhanceJudgeQuestions(){
