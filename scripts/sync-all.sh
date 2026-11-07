@@ -45,7 +45,12 @@ if [ "$CHECK_ONLY" = 0 ]; then
   LOCAL_HEAD="$(git rev-parse HEAD)"
   REMOTE_HEAD="$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)"
   if [ -z "$REMOTE_HEAD" ]; then
-    bad "读不到远端 main（gh 未登录或网络不通）"
+    printf '  读不到远端 main，先试代理自愈…\n'
+    bash scripts/net-recover.sh >/dev/null 2>&1 || true
+    REMOTE_HEAD="$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)"
+  fi
+  if [ -z "$REMOTE_HEAD" ]; then
+    bad "读不到远端 main（gh 未登录或网络不通）；先跑 scripts/net-recover.sh 看代理"
     exit 2
   fi
   if [ "$LOCAL_HEAD" = "$REMOTE_HEAD" ]; then
@@ -85,8 +90,10 @@ if [ "$CHECK_ONLY" = 0 ]; then
   say "腾讯云静态托管上传"
   for d in "${DIRS[@]}"; do
     out="$(timeout 180 tcb hosting deploy "$FILE" "$d" -e "$ENV_ID" --json 2>&1)"
+    # 注意：tcb 会「假成功」（successCount=1 但线上哈希不变），最终以一致性核对为准；
+    # 出现假成功时用 MCP manageHosting 重传两份副本。
     if printf '%s' "$out" | grep -q '"successCount": 1'; then
-      ok "$d/index.html 上传成功"
+      ok "$d/index.html 已提交（真假以末尾哈希核对为准）"
     else
       bad "$d 上传失败：$(printf '%s' "$out" | tail -3)"
     fi
