@@ -63,6 +63,21 @@ if [ "$CHECK_ONLY" = 0 ]; then
       fi
     fi
   fi
+
+  # ---------- 硬闸门（§0.0 铁律）：GitHub 上必须真的存在本地 HEAD，否则一步都不许往腾讯云走 ----------
+  say "闸门：确认 GitHub main 已含本地 HEAD"
+  GHNOW=""
+  for _i in 1 2 3 4 5; do
+    GHNOW="$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)"
+    [ "$GHNOW" = "$LOCAL_HEAD" ] && break
+    sleep 2
+  done
+  if [ "$GHNOW" != "$LOCAL_HEAD" ]; then
+    bad "GitHub main = ${GHNOW:-<读取失败>}，本地 HEAD = $LOCAL_HEAD"
+    bad "GitHub 未同步 ⇒ 按 §0.0 铁律本轮不上传腾讯云（禁止「线上新、仓库旧」）"
+    exit 2
+  fi
+  ok "GitHub main = 本地 HEAD（${LOCAL_HEAD:0:8}）"
 fi
 
 # ---------- 上传腾讯云 ----------
