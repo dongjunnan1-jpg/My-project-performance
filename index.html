@@ -77,17 +77,29 @@
      · 只在 <html class="qz-booting"> 时生效，撤掉后零残留、无样式重排；
      · 兜底：head 里的 qzBootDone 带 12s 超时 + 未捕获异常即刻撤罩，
        异常也不会长期卡在「正在加载」。
+   [FIX 2026-11-07b] 切换分区复用同一张遮罩
+     切换分区会先 releasePreparedZone / releaseZoneBodies 丢掉目标分区的视图与正文，
+     新视图要异步重建；这期间 body 的分区类与主题已经改成新分区，列表却还是旧分区的
+     DOM —— 筛选栏九宫格塌陷、SVG 图标按固有尺寸铺满、文字互相压住（用户截图那种）。
+     现在切换时给 #qzBootMask 挂 .qz-busy 盖住这段空窗，等新分区首帧渲染完成再撤。
    ============================================================ */
 html.qz-booting body > *:not(#qzBootMask){ visibility: hidden !important; }
 #qzBootMask{
   position: fixed; inset: 0; z-index: 2147483000;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  display: none; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
   background: var(--bg, #f0f7ff);
   color: var(--deep, #2c5f8a);
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
   -webkit-tap-highlight-color: transparent;
 }
-html:not(.qz-booting) #qzBootMask{ display: none !important; }
+/* 两种显示时机：① 首屏启动（html.qz-booting）② 运行期切换分区（#qzBootMask.qz-busy）。
+   运行期不再隐藏 body 其它元素 —— 遮罩本身不透明且 fixed inset:0，已经覆盖整屏；
+   只有首屏才需要 visibility:hidden 那层保险（防止合成器把半成品帧留在屏幕上）。 */
+html.qz-booting #qzBootMask,
+#qzBootMask.qz-busy{ display: flex; }
+#qzBootMask.qz-busy{ touch-action: none; overscroll-behavior: none; }
+/* 刻意不做淡入：切换分区时底下就是「跑版」的那一帧，淡入等于让它透出来一段时间。
+   0ms 显示、直接不透明，才真正挡得住。 */
 #qzBootMask .qz-boot-logo{
   font-family: "Snell Roundhand", "Apple Chancery", "Brush Script MT", "Segoe Script", "Lucida Handwriting", cursive;
   font-size: 40px; line-height: 1.1; color: var(--main, #3a7ab0);
@@ -99,27 +111,78 @@ html:not(.qz-booting) #qzBootMask{ display: none !important; }
 }
 #qzBootMask .qz-boot-tip{ font-size: 13px; opacity: .72; letter-spacing: .5px; }
 @keyframes qzBootSpin{ to{ transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce){ #qzBootMask .qz-boot-spin{ animation-duration: 2.4s; } }
+@media (prefers-reduced-motion: reduce){
+  #qzBootMask .qz-boot-spin{ animation-duration: 2.4s; }
+}
 </style>
 <script>
 /* 启动遮罩的收尾开关。定义得足够早，任何一条启动路径都能调用到。
    · 稳态下 qz-booting 已移除 ⇒ 再调无副作用（幂等）；
    · 12s 兜底：init 里若有 await 永久挂住（例如 IndexedDB 被占），
-     也不会让用户一直对着启动页。 */
+     也不会让用户一直对着启动页。
+   · [FIX 2026-11-07b] 只撤类、不再删元素：切换分区要复用这张遮罩（见 qzBusyShow）。 */
 window.qzBootDone = function(){
   try{
     var de = document.documentElement;
     if(!de || !de.classList || !de.classList.contains('qz-booting')) return;
     de.classList.remove('qz-booting');
-    var m = document.getElementById('qzBootMask');
-    if(m && m.parentNode) m.parentNode.removeChild(m);
   }catch(e){}
 };
+/* 12s 兜底 + 启动期未捕获异常立刻撤罩：宁可露出半成品，也不要一直停在「正在加载」。 */
 setTimeout(function(){ window.qzBootDone(); }, 12000);
-/* 启动期抛出未捕获异常时立刻撤罩：宁可露出半成品，也不要一直停在「正在加载」。 */
 window.addEventListener('error', function(ev){
-  if(ev && ev.message) setTimeout(function(){ window.qzBootDone(); }, 600);
+  if(ev && ev.message){
+    setTimeout(function(){ window.qzBootDone(); }, 600);
+    /* 切换分区期间抛错：立刻撤运行期遮罩，宁可露出半成品也不要卡在「正在加载」 */
+    setTimeout(function(){ if(window.qzBusyHide) window.qzBusyHide(); }, 600);
+  }
 }, false);
+window.addEventListener('unhandledrejection', function(){
+  setTimeout(function(){ if(window.qzBusyHide) window.qzBusyHide(); }, 600);
+}, false);
+/* ============================================================
+   [FIX 2026-11-07b] 运行期「加载中」遮罩（切换分区用）
+   与首屏遮罩同一个 DOM 节点，靠 .qz-busy 类显示，所以样式/主题完全一致。
+   时序：qzBusyShow(tip, zone) → 目标分区首帧渲染完成 → qzBusyHide(zone)。
+   · zone 参与匹配：只有「当初发起遮罩的那个分区」的收尾能撤罩，
+     旧分区的延迟回调不会误撤新分区的遮罩；
+   · 最短驻留 260ms：切换很快时不至于闪一下白屏；
+   · 12s 兜底强制撤罩：视图构建异常也不会永久卡住。
+   ============================================================ */
+var _qzBusy = { zone:null, shownAt:0, hideTid:0, guardTid:0 };
+function _qzNowMs(){ return (window.performance && window.performance.now) ? window.performance.now() : Date.now(); }
+function _qzBusyDetach(){
+  var m = document.getElementById('qzBootMask');
+  if(!m) return;
+  m.classList.remove('qz-busy');
+  if(_qzBusy.guardTid){ clearTimeout(_qzBusy.guardTid); _qzBusy.guardTid = 0; }
+}
+window.qzBusyShow = function(tip, zone){
+  var m = document.getElementById('qzBootMask');
+  if(!m) return;
+  if(_qzBusy.hideTid){ clearTimeout(_qzBusy.hideTid); _qzBusy.hideTid = 0; }
+  if(_qzBusy.guardTid){ clearTimeout(_qzBusy.guardTid); _qzBusy.guardTid = 0; }
+  _qzBusy.zone = zone || null;
+  var t = m.querySelector('.qz-boot-tip');
+  if(t) t.textContent = tip || '正在加载…';
+  if(!m.classList.contains('qz-busy')){
+    m.classList.add('qz-busy');
+    _qzBusy.shownAt = _qzNowMs();
+  }
+  _qzBusy.guardTid = setTimeout(function(){
+    _qzBusy.guardTid = 0; _qzBusy.zone = null; _qzBusyDetach();
+  }, 12000);
+};
+window.qzBusyActive = function(){ return !!_qzBusy.zone; };
+window.qzBusyHide = function(zone){
+  if(!_qzBusy.zone) return;                        /* 没有在忙：无副作用 */
+  if(zone && _qzBusy.zone !== zone) return;        /* 分区不匹配：留给正确的那次收尾 */
+  _qzBusy.zone = null;
+  var wait = Math.max(0, 260 - (_qzNowMs() - (_qzBusy.shownAt || 0)));
+  if(_qzBusy.hideTid) clearTimeout(_qzBusy.hideTid);
+  if(_qzBusy.guardTid){ clearTimeout(_qzBusy.guardTid); _qzBusy.guardTid = 0; }
+  _qzBusy.hideTid = setTimeout(function(){ _qzBusy.hideTid = 0; _qzBusyDetach(); }, wait);
+};
 </script>
 <script>
 /* ===== [UI 2026-10-21b] 筛选栏 SVG 图标跟随主题色 =====
@@ -11315,7 +11378,11 @@ function renderQuestions(){
       if(request!==_wrongRecencyRenderGeneration||filterState.status!=='wrong') return;
       filteredQuestions=qs;
       return renderQuestionsAfterFilter();
-    }).catch(function(e){ console.error('错题作答时间读取失败:',e); });
+    }).catch(function(e){
+      console.error('错题作答时间读取失败:',e);
+      /* [FIX 2026-11-07b] 这条分支失败后不会再有渲染收尾，遮罩要当场撤掉 */
+      if(window.qzBusyHide) window.qzBusyHide(activeZone);
+    });
   }
   _wrongRecencyRenderGeneration++;
   filteredQuestions = getFiltered();
@@ -11372,6 +11439,9 @@ function renderQuestionsAfterFilter(){
     renderZoneStats();
     if(shouldFreeze) unfreezeAndRestore(frozenScrollY);
     if(window.__pendingScrollKey) scrollDiagWrite('render','期望:'+window.__pendingScrollY+' → 实际:'+window.scrollY+' 偏差:'+(window.scrollY-window.__pendingScrollY)+'px');
+    /* [FIX 2026-11-07b] 空列表也是「渲染完成」：分区切换遮罩在这里收尾，
+       否则切到没有题目的分区时会一直停在遮罩上（等 12s 兜底才撤）。 */
+    if(window.qzBusyHide) window.qzBusyHide(activeZone);
     return;
   }
   controls.style.display='flex';
@@ -11518,6 +11588,10 @@ function renderQuestionsAfterFilter(){
   if(normalizeSearchText(filterState.search || '')){
     scheduleSearchResultFocus();
   }
+  /* [FIX 2026-11-07b] 分区切换遮罩的唯一正常收尾点：
+     走到这里说明列表、分页、题目卡、统计都已经落地，可以露出来了。
+     用 activeZone 做匹配 —— 早先那次分区的延迟收尾不会误撤新分区的遮罩。 */
+  if(window.qzBusyHide) window.qzBusyHide(activeZone);
 }
 
 function buildMaterialQuestionSequence(paper){
@@ -12171,6 +12245,15 @@ function switchFile(id){
 }
 function switchZone(z){
   stopSpeaking();
+  /* [FIX 2026-11-07b] 切换分区也要盖「正在加载」。
+     原因：本函数会先丢掉目标分区的视图与正文（下一段 release*），新视图只能异步重建；
+     而 body 的分区类、主题、筛选栏状态在本函数里已经立刻切成新分区，列表 DOM 却还是
+     旧分区的内容 —— 于是出现「筛选栏九宫格塌陷 / 图标按固有尺寸铺满 / 文字互压」
+     那种整体跑版（用户截图）。盖一层与首屏同款的遮罩，等新分区首帧渲染完再撤。
+     · 只在「目标分区视图未就绪」时才盖：视图已就绪时 renderAll 是同步完成的，不该闪一下；
+     · 收尾统一落在 renderQuestionsAfterFilter 末尾（qzBusyHide(activeZone)）。 */
+  var _busyNeeded = !zoneViewReady(z);
+  if(_busyNeeded && window.qzBusyShow) window.qzBusyShow('正在切换到 ' + zoneName(z) + '…', z);
   // 切换分区时退出复盘模式，避免跨分区数据混用
   if(reviewMode){ reviewMode=false; reviewSession=null; document.body.classList.remove('review-mode'); }
   const exitBtn=document.getElementById('reviewExitBtn'); if(exitBtn) exitBtn.style.display='none';

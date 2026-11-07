@@ -297,6 +297,10 @@ test('renderAll refreshes ratio ranges only through the subtype update', functio
   context.renderSourceSuggestions = function() {};
   context.refreshRatioRangeOptions = function() { ratioRefreshes++; };
   context.zoneViewReady = function() { return true; };
+  // 本用例只关心「renderAll 触发几次正确率区间刷新」，下列两处是后续版本给 renderAll
+  // 加的入口副作用（body 分区类同步 / 筛选下拉整体刷新），与断言无关，按空实现处理。
+  context.syncZoneBodyClasses = function() {};
+  context.updateFilterOptions = function() {};
   [
     'renderZoneTabs',
     'renderZoneStats',
