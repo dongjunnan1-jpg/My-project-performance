@@ -81,3 +81,46 @@ test('正确率区间用的是题库静态 correctRatio（不随个人作答变�
   assert.match(m[1], /q\.correctRatio/, 'qsPassRatio 应基于 q.correctRatio（题库字段）');
   assert.equal(countOccurrences(html, 'q.correctRatio ='), 0, '不应有地方把 correctRatio 改写成个人作答结果');
 });
+
+/* ===== 2026-11-08b：只改「正确率」不够，年份 / 来源的题数也必须自动变 ===== */
+test('年份 / 来源的题数走「除自身外全部筛选」的分面口径，而不是分区全量', function () {
+  const m = html.match(/function\s+computeFacetCounts\s*\(\s*\)\s*\{([\s\S]*?)\n\}/);
+  assert.ok(m, '找不到 computeFacetCounts');
+  assert.match(m[1], /filterState\.year\s*=\s*'all'/, '计算基数时应临时清空年份（排除自身维度）');
+  assert.match(m[1], /filterState\.source\s*=\s*'all'/, '计算基数时应临时清空来源（排除自身维度）');
+  assert.match(m[1], /getFiltered\s*\(\s*true\s*\)/, '基数必须借道 getFiltered，别另写一套判定');
+  assert.match(m[1], /finally/, '临时清空必须放在 try/finally 里，异常时也要还原 filterState');
+  const sig = html.match(/function\s+facetCountSignature\s*\(\s*\)\s*\{([\s\S]*?)\n\}/);
+  assert.ok(sig, '找不到 facetCountSignature');
+  assert.match(sig[1], /filterCountSignature\s*\(\s*\)/,
+    '分面签名要建立在 filterCountSignature 上（它含 _answerEpoch，否则答完题缓存命中旧数字）');
+  ['module', 'subType', 'leafType'].forEach(function(k){
+    assert.match(sig[1], new RegExp('filterState\\.' + k), '分面签名漏了 ' + k + '：三级题型变化时数字会不刷');
+  });
+});
+
+test('刷新年份 / 来源题数只改文字，不重建选项列表', function () {
+  const m = html.match(/function\s+refreshFacetCountOptions\s*\(\s*\)\s*\{([\s\S]*?)\n\}/);
+  assert.ok(m, '找不到 refreshFacetCountOptions');
+  assert.doesNotMatch(m[1], /innerHTML\s*=/, '不许重建选项：会把用户正在输入的来源关键词 / 年份面板滚动位置弄丢');
+  assert.match(m[1], /textContent\s*=/, '应就地改 option 的 textContent');
+  assert.match(m[1], /_sourceCount/, '来源计数要写回 window._sourceCount（datalist 渲染读的就是它）');
+});
+
+test('refreshFilterCounters 与 renderAll 都会刷年份 / 来源的题数', function () {
+  const rfc = html.match(/function\s+refreshFilterCounters\s*\(\s*\)\s*\{([\s\S]*?)\n\}/);
+  assert.ok(rfc, '找不到 refreshFilterCounters');
+  assert.match(rfc[1], /refreshFacetCountOptions\s*\(\s*\)/, 'refreshFilterCounters 没刷年份 / 来源（答完题它们就不会变）');
+
+  const ra = html.match(/function\s+renderAll\s*\(\s*\)\s*\{([\s\S]*?)\n\}/);
+  assert.ok(ra, '找不到 renderAll');
+  assert.match(ra[1], /refreshFacetCountOptions\s*\(\s*\)/, 'renderAll 没刷年份 / 来源（切筛选 / 切分区后口径会与模块对不上）');
+});
+
+test('来源标签清洗与 updateFilterOptions 同口径（剥「第 N 题」、模考再剥括号卷别）', function () {
+  const m = html.match(/function\s+cleanFacetSource\s*\([^)]*\)\s*\{([\s\S]*?)\n\}/);
+  assert.ok(m, '找不到 cleanFacetSource');
+  assert.match(m[1], /第\\d\+题/, '没剥掉「第N题」后缀 —— 来源选项会碎成每卷一题');
+  assert.match(m[1], /activeZone\s*===\s*'mk'/, '模考来源要按 mk 规则剥掉括号里的卷别');
+});
+

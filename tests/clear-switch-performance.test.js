@@ -301,6 +301,10 @@ test('renderAll refreshes ratio ranges only through the subtype update', functio
   // 加的入口副作用（body 分区类同步 / 筛选下拉整体刷新），与断言无关，按空实现处理。
   context.syncZoneBodyClasses = function() {};
   context.updateFilterOptions = function() {};
+  // [2026-11-08b] 年份 / 来源的 (N题) 改成「除自身外全部筛选」口径后，renderAll 末尾
+  // 会补一次 refreshFacetCountOptions()。它自己会走 getFiltered，这里只数次数。
+  let facetRefreshes = 0;
+  context.refreshFacetCountOptions = function() { facetRefreshes++; };
   [
     'renderZoneTabs',
     'renderZoneStats',
@@ -314,6 +318,7 @@ test('renderAll refreshes ratio ranges only through the subtype update', functio
   context.renderAll();
 
   assert.equal(ratioRefreshes, 1);
+  assert.equal(facetRefreshes, 1, 'renderAll 必须把年份 / 来源的题数一起刷一遍（否则口径与模块 / 正确率区间不一致）');
 });
 
 test('zone switch does not schedule a duplicate subtype refresh', function() {

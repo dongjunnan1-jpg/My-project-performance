@@ -7796,6 +7796,9 @@ function renderAll(){
   renderReviewStats();
   renderModuleBar();
   updateFilterOptions();
+  /* [FIX 2026-11-08b] updateFilterOptions 里年份 / 来源的题数是「分区全量」口径，
+     这里再按「除自身以外的全部筛选」覆盖一次数字，保证与模块 / 题型 / 正确率区间同一口径。 */
+  refreshFacetCountOptions();
   if(window.updateSubTypeFilter) window.updateSubTypeFilter();
   if(activeZone!=='sl' && activeZone!=='zy') applyFilterStateToUI();
   renderFileList();
@@ -8986,6 +8989,108 @@ function getFilterCountBaseQuestions(){
   }
   _gfcMemo.sig = sig; _gfcMemo.arr = qs;
   return qs.slice();
+}
+
+/* ===== [FIX 2026-11-08b] 「年份 / 来源」下拉的 (N题) 也要跟着作答自动更新 =====
+   用户反馈：模块 / 题型 / 细分 / 正确率区间的题数答完题会变，唯独「年份」和「来源」
+   后面那个题数纹丝不动，还得再点一下筛选才更新。
+
+   根因两条：
+   ① updateFilterOptions() 里这两项是从「分区全集」数的（遍历 getZoneQuestions），
+      既不含做题状态，也不含任何其它筛选 ⇒ 答不答题，数字都一样；
+   ② refreshFilterCounters() 只重建了模块条与三级题型，压根没碰这两个下拉。
+
+   口径（与模块 / 题型 / 细分 / 正确率区间对齐）：应用【除该维度自身以外的全部筛选】。
+   实现上不另写一套判定 —— 借道 getFiltered(true)：把「年份 / 来源」临时清成 all
+   得到的基数，再逐题补判 passYear / passSource，一次全量遍历同时算出两个维度，
+   免得每答一题多跑两遍整分区。判定口径就是筛题目那套代码，天然一致。
+
+   ⚠ 只改选项文字里的数字，绝不重建选项列表：
+     选项集合只跟「分区全量」有关（做题不会让某个年份 / 来源消失），
+     重建反而会把用户正在输入的来源关键词、年份多选面板的滚动位置弄丢。 */
+function cleanFacetSource(q){
+  var s = String((q && q.source) || '');
+  if(!s) return '';
+  if(activeZone === 'mk') s = s.replace(/[（(][^）)]*[）)]/, '').trim();   /* 模考来源太多带（卷别），先剥掉 */
+  s = s.replace(/第\d+题$/, '').trim();
+  return s.replace(/\s+$/, '');
+}
+var _facetMemo = { keys: [], map: Object.create(null) };
+function facetCountSignature(){
+  /* filterCountSignature 已含 分区/版本/搜索/年份/省份/来源/状态/区间/答题版本号，
+     这里再补上三级题型（它们也会收窄基数） */
+  return filterCountSignature() + '\u0001' + (filterState.module || 'all') + '\u0001'
+       + (filterState.subType || 'all') + '\u0001' + (filterState.leafType || 'all');
+}
+function computeFacetCounts(){
+  var sig = facetCountSignature();
+  if(_facetMemo.map[sig]) return _facetMemo.map[sig];
+  var savedYear = filterState.year, savedSource = filterState.source;
+  var base;
+  try{
+    filterState.year = 'all';
+    filterState.source = 'all';
+    base = getFiltered(true);   /* 除「年份 / 来源」以外的全部筛选（含状态 / 正确率 / 三级题型） */
+  }finally{
+    filterState.year = savedYear;
+    filterState.source = savedSource;
+  }
+  var yl = yearSelList();                    /* 年份可多选，口径必须与 getFiltered 一致 */
+  var srcVal = filterState.source;
+  var srcOn = !!(srcVal && srcVal !== 'all');
+  var years = {}, sources = {}, noYear = 0;
+  for(var i = 0; i < base.length; i++){
+    var q = base[i];
+    var passSource = !srcOn || String(q.source || '').indexOf(srcVal) >= 0;
+    var passYear = true;
+    if(yl){
+      var zy = qzYears(q);                   /* '|2024年|2025年'，无年份为 '' */
+      passYear = false;
+      for(var j = 0; j < yl.length; j++){
+        var tok = yl[j];
+        if(tok === '__none__'){ if(zy === ''){ passYear = true; break; } }
+        else if(zy.indexOf('|' + tok + '年') >= 0){ passYear = true; break; }
+      }
+    }
+    if(passSource){                          /* 年份这一维：除年份自身外的筛选全部生效 */
+      var y = primaryYearOf(q.source || '');
+      if(y) years[y] = (years[y] || 0) + 1;
+      else noYear++;
+    }
+    if(passYear){                            /* 来源这一维：除来源自身外的筛选全部生效 */
+      var label = cleanFacetSource(q);
+      if(label) sources[label] = (sources[label] || 0) + 1;
+    }
+  }
+  var out = { years: years, sources: sources, noYear: noYear };
+  _facetMemo.keys.push(sig);
+  _facetMemo.map[sig] = out;
+  while(_facetMemo.keys.length > 4){         /* 每答一题签名都会变，只留最近 4 份，别攒住整分区的引用副本 */
+    delete _facetMemo.map[_facetMemo.keys.shift()];
+  }
+  return out;
+}
+function refreshFacetCountOptions(){
+  if(activeZone !== 'gk' && activeZone !== 'mk' && activeZone !== 'sy' && activeZone !== 'gj') return;
+  if(!zoneViewReady(activeZone)) return;     /* 视图没建好：别做全分区遍历，等 renderAll 重入后再刷 */
+  var data;
+  try{ data = computeFacetCounts(); }catch(e){ return; }
+  var sel = document.getElementById('yearFilter');
+  if(sel){
+    for(var i = 0; i < sel.options.length; i++){
+      var o = sel.options[i];
+      if(o.value === 'all') continue;        /* 第 1 项承载「多选摘要」，文本由 __qfSync / 面板维护 */
+      var n = (o.value === '__none__') ? data.noYear : (data.years[o.value] || 0);
+      var txt = (o.value === '__none__' ? '未标注年份' : o.value + '年') + '（' + n + '题）';
+      if(o.textContent !== txt) o.textContent = txt;
+    }
+  }
+  window._sourceCount = data.sources;
+  try{
+    /* datalist 重画只改候选项文字；用户正在来源框里打字时先别动，免得把原生候选列表关掉 */
+    var srcInput = document.getElementById('sourceFilter');
+    if(srcInput && document.activeElement !== srcInput) renderSourceSuggestions(srcInput.value || '');
+  }catch(e){}
 }
 
 function renderModuleBar(){
@@ -14529,6 +14634,7 @@ function resetSearchNav(){
 function refreshFilterCounters(){
   renderModuleBar();
   if(window.updateSubTypeFilter) window.updateSubTypeFilter();
+  refreshFacetCountOptions();   /* [FIX 2026-11-08b] 年份 / 来源下拉的 (N题) 一起刷，别只刷模块与三级题型 */
 }
 // 搜索输入：debounce 合并连续输入，避免每敲一个字符就完整渲染
 var _searchDebounceTimer = null;
