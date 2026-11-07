@@ -3569,7 +3569,16 @@ body.skin-dark .en-pagination button.active {
             <option value="资料分析">资料分析</option>
         </select>
         <input type="file" id="fileInput" accept=".json" multiple style="display:none;">
-        <button type="button" id="uploadButton" class="btn btn-outline">上传</button>
+        <!-- [FIX 2026-11-07d] 「上传」的框写进内联样式（用户复报：在国考/省考分区刷新后，
+             遮罩撤掉的一瞬间「上传」是裸文字、没有框，几十~几百 ms 后才和旁边控件一致）。
+             排查结论：样式本身没问题（Chrome 逐帧采样 1783 次全程 2px solid #999），
+             是 iOS Safari 在网络/解析较慢时可能先画出一个「样式还没应用」的裸按钮，
+             而「文件」按钮的内联样式当场就有框 —— 两个控件因此短暂不一致。
+             把 border/圆角/白底/高度/宽度也写成内联后，元素一创建就有框，不依赖任何 CSS 时序。
+             尺寸与配色与 `.upload-zone button`（2px #999 / 6px 圆角 / 44px 高 / 铺满格子）完全一致，
+             hover 仍由 `body .upload-zone #uploadButton:hover` 的 `!important` 接管边框色。 -->
+        <button type="button" id="uploadButton" class="btn btn-outline"
+                style="border:2px solid #999;border-radius:6px;background:#fff;color:var(--deep);height:44px;min-height:44px;width:100%;box-sizing:border-box;text-align:center;cursor:pointer;">上传</button>
         <!-- [FIX 2026-11-05] 「文件」开关原先由 body 末尾的脚本 createElement 后 insert，
              脚本跑完之前首帧没有这个按钮，刷新时会看到「上传」旁边空一格（短则几十 ms，
              大文件/慢网络下可到数百 ms）。这里直接静态写出，脚本改为复用（见下方 IIFE），
