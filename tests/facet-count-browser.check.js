@@ -22,7 +22,7 @@ const { chromium } = require('playwright');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const APP = 'file://' + encodeURI(path.join(__dirname, '..', 'index.html'));
+const APP = process.env.APP_URL || ('file://' + encodeURI(path.join(__dirname, '..', 'index.html')));
 const FILE = process.env.FACET_FILE || '/tmp/facet-test/事业单位_facet测试_42题.json';
 
 let fails = 0;
@@ -87,6 +87,21 @@ async function answerFirst(p, n) {
 
   await page.goto(APP, { waitUntil: 'load', timeout: 90000 });
   await sleep(1500);
+  /* 腾讯云默认测试域名首次访问会先弹「页面访问提示 / 风险提醒」，点「确定访问」才进正文。
+     判断依据用 #submitBtn（标题里的「风险提醒」不在 body.innerText 里，别拿它当判据）。
+     这是域名自身的限制，与页面代码无关；跑线上地址时必须先过这一关。 */
+  if (await page.evaluate(() => !!document.getElementById('submitBtn'))) {
+    /* 那页上是 <button id="submitBtn" disabled>确定访问 (1s)</button>：先等 1 秒倒计时解除禁用，
+       再用真实鼠标点击（JS 里 el.click() 不算用户手势，点了也不会跳）。 */
+    await sleep(1800);
+    try { await page.click('#submitBtn', { timeout: 8000 }); } catch (e) {}
+    await sleep(4500);
+    if (await page.evaluate(() => !!document.getElementById('submitBtn'))) {
+      console.error('页面访问提示没点掉（测试域名可能已达访问上限），线上地址无法自动验证');
+      process.exit(2);
+    }
+    await sleep(2500);
+  }
   await page.setInputFiles('#fileInput', [FILE]);
 
   // 等导入 + 视图就绪
