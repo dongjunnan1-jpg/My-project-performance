@@ -8905,6 +8905,41 @@ function getModuleStatsForBar(){
   _moduleStatsMemo.sig = sig; _moduleStatsMemo.stats = stats;
   return Object.assign({}, stats);
 }
+/* [FIX 2026-11-17] 一级模块「全集」——模块下拉的选项集合，不再随筛选条件增删。
+   用户诉求：按「只显示未做 + 正确率区间」把某分类的题做完了，该一级分类不能从下拉里消失，
+             而是保留、只把后面的数字显示成 (0题)。
+   旧实现用 Object.keys(getModuleStatsForBar()) 当选项集合 ⇒ 数字为 0 的模块连 key 都没有，
+             选项直接没了；选中值还会因为查不到而被重置成「全部模块」。
+   新口径：全集 = 该分区题库里真实出现过的一级模块，只随「分区 + 题库版本」变化，
+           与年份/省份/来源/做题状态/正确率/三级题型全都不相关。
+   排序固定：mk 先按已知模块顺序，其余按码点序，「未分类」垫底；其它分区按码点序（与旧行为一致）。 */
+var MODULE_BAR_ORDER = ['常识判断', '政治理论', '言语理解与表达', '数量关系', '判断推理', '资料分析'];
+var _moduleUniverseMemo = { sig: null, list: null };
+function getModuleUniverseForBar(){
+  var isMk = (activeZone === 'mk');
+  var sig = activeZone + '\u0001' + _dbEpoch;
+  if(_moduleUniverseMemo.sig === sig && _moduleUniverseMemo.list) return _moduleUniverseMemo.list.slice();
+  var qs0 = getZoneQuestions(activeZone, '__all__');
+  var seen = Object.create(null), list = [];
+  for(var i=0;i<qs0.length;i++){
+    var m = isMk ? qzModule(qs0[i]) : qzModuleOfBar(qs0[i]);
+    if(m && !seen[m]){ seen[m] = 1; list.push(m); }
+  }
+  function rank(m){
+    if(!isMk) return 0;
+    var k = MODULE_BAR_ORDER.indexOf(m);
+    return k >= 0 ? k : (m === '未分类' ? 9999 : 1000);
+  }
+  list.sort(function(a, b){
+    var ra = rank(a), rb = rank(b);
+    if(ra !== rb) return ra - rb;
+    var ua = (a === '未分类'), ub = (b === '未分类');
+    if(ua !== ub) return ua ? 1 : -1;
+    return a < b ? -1 : (a > b ? 1 : 0);
+  });
+  _moduleUniverseMemo.sig = sig; _moduleUniverseMemo.list = list;
+  return list.slice();
+}
 /* ===== [FEATURE 2026-11-06] 年份筛选支持多选 =====
    数据模型：filterState.year 仍是字符串，但允许「逗号分隔的年份集合」：
      'all'             → 不筛选
@@ -17290,27 +17325,21 @@ window.updateSubTypeFilter = function() {
     // 动态统计所有 bigCategory（含“未分类”），不再使用固定分类白名单
     // 统计结果只与「分区 + 题库版本」有关，交给 getModuleStatsForBar() 记忆化
     var moduleStats = getModuleStatsForBar();
-    if (filterState.module !== 'all' && !moduleStats[filterState.module]) {
+    // [FIX 2026-11-17] 选项集合改用「全集」，筛到 0 题的模块也保留（数字显示 0）
+    var mkUniverse = getModuleUniverseForBar();
+    if (filterState.module !== 'all' && mkUniverse.indexOf(filterState.module) < 0) {
       filterState.module = 'all';
       filterState.subType = 'all';
       filterState.leafType = 'all';
     }
 
     moduleFilter.innerHTML = '<option value="all">全部模块</option>';
-    // 已知模块按固定顺序优先展示，其余（含“未分类”）按题数从多到少追加
-    var moduleOrder = ['常识判断', '政治理论', '言语理解与表达', '数量关系', '判断推理', '资料分析'];
-    var orderedModules = moduleOrder.filter(function(module) { return moduleStats[module] > 0; });
-    Object.keys(moduleStats).sort(function(a, b) { return moduleStats[b] - moduleStats[a]; }).forEach(function(module) {
-      if (orderedModules.indexOf(module) === -1) orderedModules.push(module);
-    });
-    orderedModules.forEach(function(module) {
+    mkUniverse.forEach(function(module) {
       var count = moduleStats[module] || 0;
-      if (count > 0) {
-        var option = document.createElement('option');
-        option.value = module;
-        option.textContent = module + ' (' + count + '题)';
-        moduleFilter.appendChild(option);
-      }
+      var option = document.createElement('option');
+      option.value = module;
+      option.textContent = module + ' (' + count + '题)';
+      moduleFilter.appendChild(option);
     });
     moduleFilter.value = filterState.module;
 
@@ -17369,18 +17398,19 @@ window.updateSubTypeFilter = function() {
   } else {
     // 与 mk 分支同理：一级模块统计交给记忆化（签名 = 过滤基础签名）
     var moduleStats = getModuleStatsForBar();
-    var modules = Object.keys(moduleStats);
+    // [FIX 2026-11-17] 选项集合改用「全集」，筛到 0 题的模块也保留（数字显示 0）
+    var modules = getModuleUniverseForBar();
 
-    if (filterState.module !== 'all' && !moduleStats[normalizeModuleName(filterState.module)]) {
+    if (filterState.module !== 'all' && modules.indexOf(normalizeModuleName(filterState.module)) < 0) {
       filterState.module = 'all';
       filterState.subType = 'all';
       filterState.leafType = 'all';
     }
     moduleFilter.innerHTML = '<option value="all">全部模块</option>';
-    modules.sort().forEach(function(module) {
+    modules.forEach(function(module) {
       var option = document.createElement('option');
       option.value = module;
-      option.textContent = module + ' (' + moduleStats[module] + '题)';
+      option.textContent = module + ' (' + (moduleStats[module] || 0) + '题)';
       moduleFilter.appendChild(option);
     });
     moduleFilter.value = normalizeModuleName(filterState.module);
