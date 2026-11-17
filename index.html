@@ -9378,7 +9378,10 @@ function updateFilterOptions() {
     // 中途去过申论/面试会被那两处重建掉（选项变成申论地区 / 面试地区）。
     // 这里做一次幂等修复，保证切回来时「国考 / 省考 / 各省份」依旧可选。
     // typeof 守卫：部分回归测试只抽取 renderAll 到沙箱里跑，缺这个函数时不能把整段渲染炸掉。
-    if(typeof ensureObjectiveProvinceOptions==='function') ensureObjectiveProvinceOptions();
+    // [FEATURE 2026-11-18] 改走 refreshProvinceOptions：它内部会先幂等修复选项集合，
+    //   再按当前筛选补上每项的 (N题)。数据加载完成后的第一帧就靠这里把数字填上。
+    if(typeof window.refreshProvinceOptions==='function'){ try{ window.refreshProvinceOptions(); }catch(e){} }
+    else if(typeof ensureObjectiveProvinceOptions==='function') ensureObjectiveProvinceOptions();
     yearFilter.innerHTML = '<option value="all">全部年份</option>' + 
         yearArray.map(function(y) {
             // [FIX 20261023] 选项带题数：用户可直接核对「各年份相加 == 总数」
@@ -14670,6 +14673,11 @@ function refreshFilterCounters(){
   renderModuleBar();
   if(window.updateSubTypeFilter) window.updateSubTypeFilter();
   refreshFacetCountOptions();   /* [FIX 2026-11-08b] 年份 / 来源下拉的 (N题) 一起刷，别只刷模块与三级题型 */
+  /* [FEATURE 2026-11-18] 地区下拉的 (N题) 同口径刷新。
+     它定义在 init() 内部（省份筛选整段都在 init 里），本函数在 init 外 ⇒ 只能走 window。 */
+  if(typeof window.refreshProvinceOptions === 'function'){
+    try{ window.refreshProvinceOptions(); }catch(e){}
+  }
 }
 // 搜索输入：debounce 合并连续输入，避免每敲一个字符就完整渲染
 var _searchDebounceTimer = null;
@@ -17560,6 +17568,13 @@ toggleBtn.onclick = function(e) {
     }
 })();
   // 初始化省份筛选
+  /* 省份筛选函数都定义在 init() 内（本段及以下），而 renderModuleBar / refreshFilterCounters
+     定义在 init 外。历史写法是 `if(typeof ensureObjectiveProvinceOptions==='function')`，
+     但局部函数永远不会挂到 window ⇒ 那个保护一直没生效。这里显式导出两个入口。
+     函数声明在本作用域内提升，所以 17563 处调用时已经可用。 */
+  window.refreshProvinceOptions = refreshProvinceOptions;
+  window.ensureObjectiveProvinceOptions = ensureObjectiveProvinceOptions;
+  window.__provinceDebug = { universe: getProvinceUniverseForBar, counts: getProvinceFacetCounts };
 initProvinceFilter();
 
 // 省份筛选函数
@@ -17579,27 +17594,109 @@ function objectiveProvinceList(){
     '甘肃', '青海', '宁夏', '新疆', '深圳'
   ];
 }
-function buildObjectiveProvinceOptions(select){
+function buildObjectiveProvinceOptions(select, counts){
   if(!select) return;
-  select.innerHTML = '<option value="all">全部省份</option>' + objectiveProvinceList().map(function(province){
-    return '<option value="' + province + '">' + province + '</option>';
+  var list = getProvinceUniverseForBar().list;
+  select.innerHTML = '<option value="all">全部省份</option>' + list.map(function(province){
+    return '<option value="' + province + '">' + provinceOptionText(province, counts) + '</option>';
   }).join('');
 }
-// 幂等修复：只在「下拉里没有国考选项」（已被申论/面试重建过）或「缺省考」时才重建。
-// 正常情况下什么都不做 —— 不影响既有的省份选择与事件绑定。
+/* [FEATURE 2026-11-18] 地区下拉：按分区剔除无意义的聚合项 + 每项显示题数
+   ------------------------------------------------------------
+   ① 为什么剔除：「国考」「省考」是聚合项而非真实省份。
+      事业单位 / 公基 题库里没有任何国考卷 ⇒ 选「国考」恒为 0 题；
+      而这两个库既然没有国考题，选「省考」就等于不筛（除国考外全部 = 全部）。
+      所以按「该分区题库里到底有没有国考卷」决定这两项留不留，而不是写死分区名。
+   ② 口径：选项集合只随「分区 + 题库版本」变化（_dbEpoch），与任何筛选无关 ——
+      否则数字变 0 时选项会消失，重演 2026-11-17 修过的模块下拉问题。
+   ③ 题数口径：「除地区自身以外的全部筛选」，与模块 / 题型 / 正确率区间一致，
+      所以「全部省份」不显示数字（它等于列表题数），其它项相加 == 列表题数。 */
+var _provUniverseMemo = { sig: null, info: null };
+function getProvinceUniverseForBar(){
+  /* initProvinceFilter() 在本段之上就调用了本函数：var 的赋值不提升，这里必须自愈 */
+  if(!_provUniverseMemo) _provUniverseMemo = { sig: null, info: null };
+  var sig = activeZone + '\u0001' + _dbEpoch;
+  if(_provUniverseMemo.sig === sig && _provUniverseMemo.info) return _provUniverseMemo.info;
+  var qs = getZoneQuestions(activeZone, '__all__');
+  var hasGk = false, hasLocal = false;
+  for(var i = 0; i < qs.length; i++){
+    if(qzProv(qs[i]) === '国考') hasGk = true;
+    else hasLocal = true;
+    if(hasGk && hasLocal) break;              /* 两项是否有效都已确定，不必再扫 */
+  }
+  var list = objectiveProvinceList().filter(function(v){
+    if(v === '国考') return hasGk;            /* 没有国考卷 → 隐藏 */
+    if(v === '省考') return hasGk && hasLocal;/* 无国考题时「省考」恒等于全量 → 隐藏 */
+    return true;                              /* 真实省份始终保留，0 题也显示 (0题) */
+  });
+  var info = { list: list, hasGk: hasGk, hasLocal: hasLocal };
+  _provUniverseMemo.sig = sig; _provUniverseMemo.info = info;
+  return info;
+}
+function provinceOptionText(name, counts){
+  var n = counts ? (counts[name] || 0) : 0;
+  return name + ' (' + n + '题)';
+}
+var _provCountMemo = { sig: null, map: null };
+function getProvinceFacetCounts(){
+  if(!_provCountMemo) _provCountMemo = { sig: null, map: null };
+  var saved = filterState.province;
+  filterState.province = 'all';
+  var sig = '';
+  try{ sig = facetCountSignature() + '\u0001prov'; }catch(e){}
+  if(sig && _provCountMemo.sig === sig && _provCountMemo.map){
+    filterState.province = saved;
+    return _provCountMemo.map;
+  }
+  var base;
+  try{
+    base = getFiltered(true);                 /* 除地区以外的全部筛选（含状态 / 正确率 / 三级题型） */
+  }finally{
+    filterState.province = saved;
+  }
+  var map = { all: base.length, '省考': base.length };
+  for(var i = 0; i < base.length; i++){
+    var p = qzProv(base[i]);
+    if(p === '国考'){ map['国考'] = (map['国考'] || 0) + 1; map['省考']--; }
+    else if(p) map[p] = (map[p] || 0) + 1;    /* 「省考」与其他项不同：它含 source 读不出地区的题 */
+  }
+  if(sig){ _provCountMemo.sig = sig; _provCountMemo.map = map; }
+  return map;
+}
+// 幂等修复：选项集合必须等于本分区的有效列表；不一致才重建（保留当前选择）。
+// 当前选择落在被剔除项上（如 gk 选了「国考」再切到 sy）→ 退回「全部省份」。
 function ensureObjectiveProvinceOptions(){
   var select = document.getElementById('provinceFilter');
   if(!select) return;
-  var hasGk = false, hasSk = false;
-  for(var i=0;i<select.options.length;i++){
+  var want = getProvinceUniverseForBar().list;
+  var cur = [];
+  for(var i = 0; i < select.options.length; i++){
     var v = select.options[i].value;
-    if(v==='国考') hasGk = true;
-    if(v==='省考') hasSk = true;
+    if(v !== 'all') cur.push(v);
   }
-  if(hasGk && hasSk) return;
   var keep = filterState.province || 'all';
+  if(keep !== 'all' && want.indexOf(keep) < 0){ keep = 'all'; filterState.province = 'all'; }
+  var same = (cur.length === want.length);
+  for(var j = 0; same && j < want.length; j++){ if(cur[j] !== want[j]) same = false; }
+  if(same) return;
   buildObjectiveProvinceOptions(select);
   setSelectValue(select, keep);
+}
+// 只改选项文字里的数字，不动选项集合（答题 / 改其它筛选时不重建下拉，避免闪一下）
+function refreshProvinceOptions(){
+  if(activeZone !== 'gk' && activeZone !== 'mk' && activeZone !== 'sy' && activeZone !== 'gj') return;
+  if(typeof zoneViewReady === 'function' && !zoneViewReady(activeZone)) return;
+  var select = document.getElementById('provinceFilter');
+  if(!select) return;
+  try{ ensureObjectiveProvinceOptions(); }catch(e){ return; }
+  var counts;
+  try{ counts = getProvinceFacetCounts(); }catch(e){ return; }
+  for(var i = 0; i < select.options.length; i++){
+    var o = select.options[i];
+    if(o.value === 'all') continue;
+    var txt = provinceOptionText(o.value, counts);
+    if(o.textContent !== txt) o.textContent = txt;
+  }
 }
 function initProvinceFilter() {
   var sourceFilter = document.getElementById('sourceFilter');
