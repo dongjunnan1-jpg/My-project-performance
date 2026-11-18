@@ -8940,6 +8940,73 @@ function getModuleUniverseForBar(){
   _moduleUniverseMemo.sig = sig; _moduleUniverseMemo.list = list;
   return list.slice();
 }
+/* [FEATURE 2026-11-19] 二级 / 三级题型「全集」——与一级模块同一口径：
+   选项集合只随「分区 + 题库版本 + 上级已选值（模块 / 二级）」变化，
+   不随做题状态、正确率区间、年份、省份、来源等筛选条件增删；
+   某题型被筛到 0 题时留在下拉里，只把后面的数字显示成 (0题)。
+   旧实现直接用 Object.keys(统计结果) 当选项集合 ⇒ 0 题的题型连 key 都没有，选项整条消失。
+   数据结构：module -> { subs:{sub:1}, leaves:{leaf:1}, subLeaves:{sub:{leaf:1}} }
+   一次 O(N) 扫描，按「分区 + _dbEpoch」记忆化（题库重载后 _dbEpoch 变化自动失效）。 */
+var _catTreeMemo = { sig: null, tree: null };
+function getCategoryTreeForBar(){
+  var isMk = (activeZone === 'mk');
+  var sig = activeZone + '\u0001' + _dbEpoch;
+  if(_catTreeMemo.sig === sig && _catTreeMemo.tree) return _catTreeMemo.tree;
+  var qs0 = getZoneQuestions(activeZone, '__all__');
+  var byModule = Object.create(null);
+  for(var i=0;i<qs0.length;i++){
+    var q = qs0[i];
+    var m = isMk ? qzModule(q) : qzModuleOfBar(q);
+    if(!m) m = '未分类';
+    var sub = isMk ? (q.subCategory || q.subType || '') : (q.subCategory || '');
+    var leaf = isMk ? (q.leafCategory || q.leafType || '') : (q.leafCategory || '');
+    var mb = byModule[m];
+    if(!mb) mb = byModule[m] = { subs: Object.create(null), leaves: Object.create(null), subLeaves: Object.create(null) };
+    if(leaf) mb.leaves[leaf] = 1;
+    if(sub){
+      mb.subs[sub] = 1;
+      var sl = mb.subLeaves[sub];
+      if(!sl) sl = mb.subLeaves[sub] = Object.create(null);
+      if(leaf) sl[leaf] = 1;
+    }
+  }
+  _catTreeMemo.sig = sig; _catTreeMemo.tree = { byModule: byModule };
+  return _catTreeMemo.tree;
+}
+// 当前生效的一级模块，与模块下拉 value 同口径（gk/sy/gj 用 normalizeModuleName 归一再比）
+function barSelectedModuleForUniverse(){
+  var m = filterState.module;
+  if(!m || m === 'all') return 'all';
+  return (activeZone === 'mk') ? m : (normalizeModuleName(m) || 'all');
+}
+// 二级题型全集：限定在「当前已选一级模块」之下；模块为 all 时取全分区并集。
+function getSubTypeUniverseForBar(){
+  var tree = getCategoryTreeForBar();
+  var m = barSelectedModuleForUniverse();
+  var out = [], seen = Object.create(null);
+  var pushFrom = function(src){
+    Object.keys(src).forEach(function(k){ if(!seen[k]){ seen[k] = 1; out.push(k); } });
+  };
+  if(m !== 'all' && tree.byModule[m]) pushFrom(tree.byModule[m].subs);
+  else Object.keys(tree.byModule).forEach(function(k){ pushFrom(tree.byModule[k].subs); });
+  return out;
+}
+// 三级题型全集：二级已选 ⇒ 取该二级下的全部三级；二级为 all ⇒ 取当前模块下的全部三级。
+function getLeafTypeUniverseForBar(){
+  var tree = getCategoryTreeForBar();
+  var m = barSelectedModuleForUniverse();
+  var sub = (filterState.subType && filterState.subType !== 'all') ? filterState.subType : 'all';
+  var out = [], seen = Object.create(null);
+  var pushFrom = function(src){
+    Object.keys(src).forEach(function(k){ if(!seen[k]){ seen[k] = 1; out.push(k); } });
+  };
+  var mods = (m !== 'all' && tree.byModule[m]) ? [tree.byModule[m]] : Object.keys(tree.byModule).map(function(k){ return tree.byModule[k]; });
+  mods.forEach(function(mb){
+    if(sub !== 'all'){ if(mb.subLeaves[sub]) pushFrom(mb.subLeaves[sub]); }
+    else pushFrom(mb.leaves);
+  });
+  return out;
+}
 /* ===== [FEATURE 2026-11-06] 年份筛选支持多选 =====
    数据模型：filterState.year 仍是字符串，但允许「逗号分隔的年份集合」：
      'all'             → 不筛选
@@ -17364,7 +17431,8 @@ window.updateSubTypeFilter = function() {
         subTypeStats[subType]++;
       }
     });
-    var subTypes = Object.keys(subTypeStats);
+    // [FIX 2026-11-19] 选项集合改用「二级全集」，筛到 0 题的题型也保留（数字显示 0）
+    var subTypes = getSubTypeUniverseForBar();
     if (filterState.subType !== 'all' && !subTypes.includes(filterState.subType)) {
       filterState.subType = 'all';
       filterState.leafType = 'all';
@@ -17374,7 +17442,7 @@ window.updateSubTypeFilter = function() {
     subTypes.forEach(function(subType) {
       var option = document.createElement('option');
       option.value = subType;
-      option.textContent = subType + ' (' + subTypeStats[subType] + '题)';
+      option.textContent = subType + ' (' + (subTypeStats[subType] || 0) + '题)';
       subTypeFilter.appendChild(option);
     });
     subTypeFilter.value = filterState.subType;
@@ -17390,7 +17458,8 @@ window.updateSubTypeFilter = function() {
         leafTypeStats[leafType]++;
       }
     });
-    var leafTypes = Object.keys(leafTypeStats);
+    // [FIX 2026-11-19] 选项集合改用「三级全集」，筛到 0 题的细分也保留（数字显示 0）
+    var leafTypes = getLeafTypeUniverseForBar();
     if (filterState.leafType !== 'all' && !leafTypes.includes(filterState.leafType)) {
       filterState.leafType = 'all';
     }
@@ -17399,7 +17468,7 @@ window.updateSubTypeFilter = function() {
     leafTypes.forEach(function(leafType) {
       var option = document.createElement('option');
       option.value = leafType;
-      option.textContent = leafType + ' (' + leafTypeStats[leafType] + '题)';
+      option.textContent = leafType + ' (' + (leafTypeStats[leafType] || 0) + '题)';
       leafTypeFilter.appendChild(option);
     });
     leafTypeFilter.value = filterState.leafType;
@@ -17431,7 +17500,8 @@ window.updateSubTypeFilter = function() {
     moduleQuestions.forEach(function(q) {
       if (q.subCategory) subTypeStats[q.subCategory] = (subTypeStats[q.subCategory] || 0) + 1;
     });
-    var subTypes = Object.keys(subTypeStats);
+    // [FIX 2026-11-19] 选项集合改用「二级全集」，筛到 0 题的题型也保留（数字显示 0）
+    var subTypes = getSubTypeUniverseForBar();
     if (filterState.subType !== 'all' && !subTypes.includes(filterState.subType)) {
       filterState.subType = 'all';
       filterState.leafType = 'all';
@@ -17441,7 +17511,7 @@ window.updateSubTypeFilter = function() {
     subTypes.forEach(function(subType) {
       var option = document.createElement('option');
       option.value = subType;
-      option.textContent = subType + ' (' + subTypeStats[subType] + '题)';
+      option.textContent = subType + ' (' + (subTypeStats[subType] || 0) + '题)';
       subTypeFilter.appendChild(option);
     });
     subTypeFilter.value = filterState.subType;
@@ -17453,7 +17523,8 @@ window.updateSubTypeFilter = function() {
     leafQuestions.forEach(function(q) {
       if (q.leafCategory) leafTypeStats[q.leafCategory] = (leafTypeStats[q.leafCategory] || 0) + 1;
     });
-    var leafTypes = Object.keys(leafTypeStats);
+    // [FIX 2026-11-19] 选项集合改用「三级全集」，筛到 0 题的细分也保留（数字显示 0）
+    var leafTypes = getLeafTypeUniverseForBar();
     if (filterState.leafType !== 'all' && !leafTypes.includes(filterState.leafType)) {
       filterState.leafType = 'all';
     }
@@ -17462,7 +17533,7 @@ window.updateSubTypeFilter = function() {
     leafTypes.forEach(function(leafType) {
       var option = document.createElement('option');
       option.value = leafType;
-      option.textContent = leafType + ' (' + leafTypeStats[leafType] + '题)';
+      option.textContent = leafType + ' (' + (leafTypeStats[leafType] || 0) + '题)';
       leafTypeFilter.appendChild(option);
     });
     leafTypeFilter.value = filterState.leafType;
