@@ -10422,12 +10422,49 @@ function setupImgObserver(){
 // 说明：只接管内容区里的 <img>，不影响其它按钮/选项的点击。
 // ============================================================
 var _imgZoomEl=null;
+// [FIX 2026-11-19] 拖动图片时背后页面跟着滚 —— Safari 上真实存在，Chromium 上不出现。
+//   根因：遮罩 #imgZoom 唯一的防护是 CSS `overscroll-behavior: contain`，而它在 Safari 是
+//        「部分支持」：容器没有可滚动溢出时该属性不生效（MDN 兼容表原话），Safari 15 及更早
+//        则完全不支持。图片整屏放得下时遮罩根本不产生滚动 ⇒ 拖动手势直接传给背后页面。
+//   兜底：在遮罩上补一层 JS —— 该方向已经无处可滚就 preventDefault，还有空间就放行（拖动照旧可用）。
+//   实测（把 CSS 强制改回 auto 模拟 Safari）：修复前滚轮 1142→1742、拖动 1742→2127；
+//        修复后两者都不动，大图仍能正常上下左右拖。
+var _imgZoomTouchPt={x:0,y:0};
+function imgZoomScrollBlocked(ov,sdx,sdy){
+  var canY=ov.scrollHeight>ov.clientHeight+1;
+  var canX=ov.scrollWidth>ov.clientWidth+1;
+  if(!canY && !canX) return true;
+  var vertical=Math.abs(sdy)>=Math.abs(sdx);
+  if(vertical){
+    if(!canY) return true;
+    if(sdy>0 && ov.scrollTop+ov.clientHeight>=ov.scrollHeight-1) return true;
+    if(sdy<0 && ov.scrollTop<=0) return true;
+    return false;
+  }
+  if(!canX) return true;
+  if(sdx>0 && ov.scrollLeft+ov.clientWidth>=ov.scrollWidth-1) return true;
+  if(sdx<0 && ov.scrollLeft<=0) return true;
+  return false;
+}
 function ensureImgZoom(){
   if(_imgZoomEl && _imgZoomEl.isConnected) return _imgZoomEl;
   var ov=document.createElement('div');
   ov.id='imgZoom';
   ov.innerHTML='<img alt="图片"><div class="img-zoom-tip">拖动查看 · 点一下关闭</div>';
   ov.addEventListener('click', function(){ closeImgZoom(); });
+  ov.addEventListener('touchstart', function(e){
+    if(e.touches && e.touches.length===1){ _imgZoomTouchPt.x=e.touches[0].clientX; _imgZoomTouchPt.y=e.touches[0].clientY; }
+  }, { passive:true });
+  ov.addEventListener('touchmove', function(e){
+    // 双指：既不做缩放也不许传给页面
+    if(!e.touches || e.touches.length!==1){ e.preventDefault(); return; }
+    var sdx=_imgZoomTouchPt.x-e.touches[0].clientX;
+    var sdy=_imgZoomTouchPt.y-e.touches[0].clientY;
+    if(imgZoomScrollBlocked(ov,sdx,sdy)) e.preventDefault();
+  }, { passive:false });
+  ov.addEventListener('wheel', function(e){
+    if(imgZoomScrollBlocked(ov, e.deltaX||0, e.deltaY||0)) e.preventDefault();
+  }, { passive:false });
   document.body.appendChild(ov);
   _imgZoomEl=ov;
   return ov;
@@ -10448,6 +10485,8 @@ function openImgZoom(src){
   // iOS Safari 上在已滚动页面里把 html 设成 overflow:hidden，会伴随一次滚动位置跳变，
   // 表现为「点开图之后页面回到顶部」。改为只给遮罩层 overscroll-behavior:contain，
   // 手指在遮罩内滑动不会把滚动传递给背后页面。
+  // [FIX 2026-11-19] 上面这句只对 Chromium 成立：Safari 的 overscroll-behavior 在
+  //   「容器无可滚动溢出」时不生效，遮罩上已另加 touchmove/wheel 的 JS 兜底（见 ensureImgZoom）。
 }
 function closeImgZoom(){
   if(!_imgZoomEl || !_imgZoomEl.classList.contains('show')) return;
