@@ -7967,7 +7967,13 @@ function qzHalf(p){
   return p._qzHalf;
 }
 function qzProv(p){
-  if(p._qzProv===undefined) p._qzProv = testProvince(String(p.source||''));
+  // [PATCH 20261122] 题目自带「原题出处地区」时优先用它：
+  //   模考卷大量复用各省真题/省考卷，source 是本题所属模考卷（全为「国考」），
+  //   出处地区只能另存字段 originProvince。没有该字段的老文件行为完全不变。
+  if(p._qzProv===undefined){
+    var __op = p && p.originProvince;
+    p._qzProv = (typeof __op==='string' && __op) ? __op : testProvince(String(p.source||''));
+  }
   return p._qzProv;
 }
 // [FEATURE 2026-11-04] 「省考」是地区下拉里的**聚合筛选项**，不是一个真实省份。
