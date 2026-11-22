@@ -7799,6 +7799,7 @@ function renderAll(){
   /* [FIX 2026-11-08b] updateFilterOptions 里年份 / 来源的题数是「分区全量」口径，
      这里再按「除自身以外的全部筛选」覆盖一次数字，保证与模块 / 题型 / 正确率区间同一口径。 */
   refreshFacetCountOptions();
+  refreshStatusOptions();   /* [FEATURE 2026-11-23] updateFilterOptions 重建状态下拉后，补上每项 (N题) */
   if(window.updateSubTypeFilter) window.updateSubTypeFilter();
   if(activeZone!=='sl' && activeZone!=='zy') applyFilterStateToUI();
   renderFileList();
@@ -9909,6 +9910,121 @@ function qsPassStatus(q){
   if(st === 'note')       return getQuestionNoteCount(q._key) > 0;
   if(st === 'commented')  return !!q._hasComment;
   return true;
+}
+/* ===== [FEATURE 2026-11-23] 做题状态下拉的 (N题) =====
+   口径：每一项后面的题数 = 应用【除做题状态自身以外的全部筛选】后的题数
+        （含模块 / 二三级题型 / 年份 / 地区 / 来源 / 正确率区间），
+        与模块、年份、地区、二三级题型完全同一口径。
+   选项集合固定 8 项、0 题写 (0题)，不随筛选增删 —— 与 2026-11-17/19 修过的
+   「选项消失」遵循同一原则：集合只随分区/题库版本变，数字随筛选实算。
+
+   ⚠ 这里的判定必须与 getFiltered 各分区分支逐条对齐，否则会出现
+     「标注 12 题、点进去 0 题」的历史 bug（那是统计与筛选用两套实现造成的）。
+     - 申论 / 综应：getFiltered 只按 心得 / 收藏 / 评论 筛，未做-已做-错-对 不参与
+       （心得用的是 essayNotesCache + getEssayNoteKey，不是 getQuestionNoteCount）
+     - 面试：同样是 心得 / 收藏 / 评论 三项生效
+     - 模考 / 行测 / 事业单位 / 公基：四项做题状态全部生效（qsPassStatus 同一套判断）
+   本函数只供「状态下拉计数」使用，不改 qsPassStatus 的既有行为。 */
+var STATUS_OPTION_LABELS = {
+  all: '全部状态',
+  unanswered: '只显示未做',
+  answered: '只显示已做',
+  wrong: '只显示错题',
+  correct: '只显示做对',
+  favorite: '⭐ 只显示收藏',
+  note: '📝 只显示心得',
+  commented: '💬 只显示有评论'
+};
+function statusBucketPasses(q, st, zone){
+  if(!st || st === 'all') return true;
+  zone = zone || activeZone;
+  if(zone === 'sl' || zone === 'zy'){
+    if(st === 'note'){
+      var notes = (typeof essayNotesCache === 'object' && essayNotesCache) ? essayNotesCache : {};
+      var nk = getEssayNoteKey(q);
+      return !!(nk && notes[nk] && String(notes[nk]).trim());
+    }
+    if(st === 'favorite')  return isFavorite(q._key);
+    if(st === 'commented') return !!q._hasComment;
+    return true;
+  }
+  if(zone === 'ms'){
+    if(st === 'note')      return getQuestionNoteCount(q._key) > 0;
+    if(st === 'favorite')  return isFavorite(q._key);
+    if(st === 'commented') return !!q._hasComment;
+    return true;
+  }
+  var ic = isAnsweredCorrect(q);
+  if(st === 'unanswered') return ic === null;
+  if(st === 'answered')   return ic !== null;
+  if(st === 'wrong')      return ic === false;
+  if(st === 'correct')    return ic === true;
+  if(st === 'favorite')   return isFavorite(q._key);
+  if(st === 'note')       return getQuestionNoteCount(q._key) > 0;
+  if(st === 'commented')  return !!q._hasComment;
+  return true;
+}
+var _statusCountMemo = { sig: null, counts: null };
+function getStatusFacetCounts(){
+  var saved = filterState.status;
+  filterState.status = 'all';
+  var sig = '';
+  try{ sig = facetCountSignature() + '\u0001status'; }catch(e){}
+  if(sig && _statusCountMemo.sig === sig && _statusCountMemo.counts){
+    filterState.status = saved;
+    return _statusCountMemo.counts;
+  }
+  var base;
+  try{
+    base = getFiltered(true);          /* 除「状态」以外的全部筛选 */
+  }finally{
+    filterState.status = saved;
+  }
+  var zone = activeZone;
+  var n = base.length;
+  /* 申论 / 综应 / 面试：未做-已做-错-对 不参与筛选 ⇒ 恒等于全部 */
+  var c = { all: n, unanswered: n, answered: n, wrong: n, correct: n,
+            favorite: 0, note: 0, commented: 0 };
+  if(zone === 'sl' || zone === 'zy' || zone === 'ms'){
+    for(var i = 0; i < n; i++){
+      var q = base[i];
+      if(isFavorite(q._key)) c.favorite++;
+      if(q._hasComment) c.commented++;
+      if(statusBucketPasses(q, 'note', zone)) c.note++;
+    }
+  }else{
+    c.unanswered = 0; c.answered = 0; c.wrong = 0; c.correct = 0;
+    for(var j = 0; j < n; j++){
+      var q2 = base[j];
+      var ic = isAnsweredCorrect(q2);   /* 每题只算一次，四个桶共用 */
+      if(ic === null) c.unanswered++;
+      else c.answered++;
+      if(ic === true) c.correct++;
+      else if(ic === false) c.wrong++;
+      if(isFavorite(q2._key)) c.favorite++;
+      if(q2._hasComment) c.commented++;
+      if(getQuestionNoteCount(q2._key) > 0) c.note++;
+    }
+  }
+  if(sig){ _statusCountMemo.sig = sig; _statusCountMemo.counts = c; }
+  return c;
+}
+/* 只改选项文字里的数字，不动选项集合（避免答题/改筛选时下拉闪一下、选择丢失） */
+function refreshStatusOptions(){
+  var select = document.getElementById('statusFilter');
+  if(!select) return;
+  if(typeof zoneViewReady === 'function' && !zoneViewReady(activeZone)) return;
+  var counts;
+  try{ counts = getStatusFacetCounts(); }catch(e){ return; }
+  var keep = filterState.status || 'all';
+  for(var i = 0; i < select.options.length; i++){
+    var o = select.options[i];
+    var label = STATUS_OPTION_LABELS[o.value];
+    if(!label) continue;                       /* 非本函数管理的项，原样保留 */
+    var txt = label + ' (' + (counts[o.value] || 0) + '题)';
+    if(o.textContent !== txt) o.textContent = txt;
+  }
+  if(select.value !== keep) select.value = keep;
 }
 var _ratioBoundsMemo = { sig: null, min: 0, max: 100 };
 function ratioRangeBounds(){
@@ -14789,6 +14905,10 @@ function refreshFilterCounters(){
      它定义在 init() 内部（省份筛选整段都在 init 里），本函数在 init 外 ⇒ 只能走 window。 */
   if(typeof window.refreshProvinceOptions === 'function'){
     try{ window.refreshProvinceOptions(); }catch(e){}
+  }
+  /* [FEATURE 2026-11-23] 做题状态下拉的 (N题) 同口径刷新 */
+  if(typeof refreshStatusOptions === 'function'){
+    try{ refreshStatusOptions(); }catch(e){}
   }
 }
 // 搜索输入：debounce 合并连续输入，避免每敲一个字符就完整渲染
