@@ -17594,8 +17594,9 @@ window.updateSubTypeFilter = function() {
     resetSortByOnScopeChange();
     currentPage = 1;
     saveView();
-    renderModuleBar();
-    window.updateSubTypeFilter();
+    /* [FIX 2026-11-23] 原来只刷模块条 + 二三级下拉，年份 / 来源 / 地区的 (N题) 不动。
+       它们走的是 getFiltered(true) 全量重算，必须经 refreshFilterCounters 一并刷新。 */
+    refreshFilterCounters();
     renderQuestions();
   };
 
@@ -17605,7 +17606,8 @@ window.updateSubTypeFilter = function() {
     resetSortByOnScopeChange();
     currentPage = 1;
     saveView();
-    window.updateSubTypeFilter();
+    /* [FIX 2026-11-23] 同上：二级变化会收窄年份 / 地区 / 来源的基数，必须一起刷新 */
+    refreshFilterCounters();
     renderQuestions();
   };
 

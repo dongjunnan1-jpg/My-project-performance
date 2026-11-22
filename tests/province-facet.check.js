@@ -24,7 +24,7 @@ const path = require('node:path');
 
 const APP = 'file://' + encodeURI(path.join(__dirname, '..', 'index.html'));
 const MK_FILE = process.env.MK_FILE
-  || '/Users/helium/Library/Mobile Documents/com~apple~CloudDocs/题库/新一期/2026-11-15_模考第四十三季/模考第四十三季-省考第三十五季_全科246题.json';
+  || '/Users/helium/Library/Mobile Documents/com~apple~CloudDocs/题库/总库/粉笔模考/模考第四十三季-省考下半年第三十五季_收藏题_已分类_246题_20261115.json';
 const SY_FILE = process.env.SY_FILE
   || '/Users/helium/Library/Mobile Documents/com~apple~CloudDocs/题库/总库/事业单位总库/事业单位_2025-2026_5249题.json';
 
