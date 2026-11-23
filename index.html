@@ -8997,16 +8997,21 @@ function getModuleStatsForBar(){
              而是保留、只把后面的数字显示成 (0题)。
    旧实现用 Object.keys(getModuleStatsForBar()) 当选项集合 ⇒ 数字为 0 的模块连 key 都没有，
              选项直接没了；选中值还会因为查不到而被重置成「全部模块」。
-   新口径：全集 = 该分区题库里真实出现过的一级模块，只随「分区 + 题库版本」变化，
-           与年份/省份/来源/做题状态/正确率/三级题型全都不相关。
+   口径（[FIX 2026-11-24] 收紧）：集合 = 在「题库维度筛选」下真实出现过的模块。
+     · 跟着变：搜索词 / 年份 / 地区 / 来源（getFilterBaseQuestions 的全部输入）——
+       用户选了 2019 年，就只有 2019 年真实有题的模块，不再列别的年份才有的模块（0 题）。
+     · 不跟着变：做题状态 / 正确率区间（getFilterCountBaseQuestions 才叠加二者）——
+       题目做完导致 0 题时，模块留在下拉里，只把数字显示成 (0题)。
+   旧口径是「只随分区 + 题库版本」，年份把某模块筛到 0 题后仍保留该模块并显示 (0题)，
+   被用户判为「原本就没有的模块还在显示」。
    排序固定：mk 先按已知模块顺序，其余按码点序，「未分类」垫底；其它分区按码点序（与旧行为一致）。 */
 var MODULE_BAR_ORDER = ['常识判断', '政治理论', '言语理解与表达', '数量关系', '判断推理', '资料分析'];
 var _moduleUniverseMemo = { sig: null, list: null };
 function getModuleUniverseForBar(){
   var isMk = (activeZone === 'mk');
-  var sig = activeZone + '\u0001' + _dbEpoch;
+  var sig = filterBaseSignature();
   if(_moduleUniverseMemo.sig === sig && _moduleUniverseMemo.list) return _moduleUniverseMemo.list.slice();
-  var qs0 = getZoneQuestions(activeZone, '__all__');
+  var qs0 = getFilterBaseQuestions();
   var seen = Object.create(null), list = [];
   for(var i=0;i<qs0.length;i++){
     var m = isMk ? qzModule(qs0[i]) : qzModuleOfBar(qs0[i]);
@@ -9028,18 +9033,19 @@ function getModuleUniverseForBar(){
   return list.slice();
 }
 /* [FEATURE 2026-11-19] 二级 / 三级题型「全集」——与一级模块同一口径：
-   选项集合只随「分区 + 题库版本 + 上级已选值（模块 / 二级）」变化，
-   不随做题状态、正确率区间、年份、省份、来源等筛选条件增删；
-   某题型被筛到 0 题时留在下拉里，只把后面的数字显示成 (0题)。
+   选项集合随「题库维度筛选」变化（搜索 / 年份 / 地区 / 来源 / 上级已选值），
+   不随「做题维度」变化（做题状态 / 正确率区间）。
+   ⇒ 年份 2019 下没有的题型不再列出（原来会留一条 (0题)）；
+   ⇒ 某题型被「只显示未做 / 做对 / 错题」筛到 0 题时仍留在下拉里，数字显示 (0题)。
    旧实现直接用 Object.keys(统计结果) 当选项集合 ⇒ 0 题的题型连 key 都没有，选项整条消失。
    数据结构：module -> { subs:{sub:1}, leaves:{leaf:1}, subLeaves:{sub:{leaf:1}} }
-   一次 O(N) 扫描，按「分区 + _dbEpoch」记忆化（题库重载后 _dbEpoch 变化自动失效）。 */
+   一次 O(N) 扫描，按 filterBaseSignature() 记忆化（年份/地区/来源一变自动重建）。 */
 var _catTreeMemo = { sig: null, tree: null };
 function getCategoryTreeForBar(){
   var isMk = (activeZone === 'mk');
-  var sig = activeZone + '\u0001' + _dbEpoch;
+  var sig = filterBaseSignature();
   if(_catTreeMemo.sig === sig && _catTreeMemo.tree) return _catTreeMemo.tree;
-  var qs0 = getZoneQuestions(activeZone, '__all__');
+  var qs0 = getFilterBaseQuestions();
   var byModule = Object.create(null);
   for(var i=0;i<qs0.length;i++){
     var q = qs0[i];
@@ -9060,11 +9066,11 @@ function getCategoryTreeForBar(){
   _catTreeMemo.sig = sig; _catTreeMemo.tree = { byModule: byModule };
   return _catTreeMemo.tree;
 }
-// 当前生效的一级模块，与模块下拉 value 同口径（gk/sy/gj 用 normalizeModuleName 归一再比）
+// 当前生效的一级模块，与模块下拉 value 同口径（mk / gk / sy / gj 统一走 normalizeModuleName）
 function barSelectedModuleForUniverse(){
   var m = filterState.module;
   if(!m || m === 'all') return 'all';
-  return (activeZone === 'mk') ? m : (normalizeModuleName(m) || 'all');
+  return normalizeModuleName(m) || 'all';
 }
 // 二级题型全集：限定在「当前已选一级模块」之下；模块为 all 时取全分区并集。
 function getSubTypeUniverseForBar(){
@@ -9074,8 +9080,14 @@ function getSubTypeUniverseForBar(){
   var pushFrom = function(src){
     Object.keys(src).forEach(function(k){ if(!seen[k]){ seen[k] = 1; out.push(k); } });
   };
-  if(m !== 'all' && tree.byModule[m]) pushFrom(tree.byModule[m].subs);
-  else Object.keys(tree.byModule).forEach(function(k){ pushFrom(tree.byModule[k].subs); });
+  /* [FIX 2026-11-24] 模块非 all 但在当前筛选下不存在时，**不要**降级成全分区并集：
+     降级会把别的模块才有的题型塞进下拉（全是 0题），正是「原本没有却还在显示」。
+     此时返回空集，上层渲染会把 filterState.subType 回退成 all。 */
+  if(m !== 'all'){
+    if(tree.byModule[m]) pushFrom(tree.byModule[m].subs);
+  } else {
+    Object.keys(tree.byModule).forEach(function(k){ pushFrom(tree.byModule[k].subs); });
+  }
   return out;
 }
 // 三级题型全集：二级已选 ⇒ 取该二级下的全部三级；二级为 all ⇒ 取当前模块下的全部三级。
@@ -9087,7 +9099,10 @@ function getLeafTypeUniverseForBar(){
   var pushFrom = function(src){
     Object.keys(src).forEach(function(k){ if(!seen[k]){ seen[k] = 1; out.push(k); } });
   };
-  var mods = (m !== 'all' && tree.byModule[m]) ? [tree.byModule[m]] : Object.keys(tree.byModule).map(function(k){ return tree.byModule[k]; });
+  // 同上：模块非 all 但在当前筛选下不存在 ⇒ 返回空集，不降级成全分区并集
+  var mods;
+  if(m !== 'all') mods = tree.byModule[m] ? [tree.byModule[m]] : [];
+  else mods = Object.keys(tree.byModule).map(function(k){ return tree.byModule[k]; });
   mods.forEach(function(mb){
     if(sub !== 'all'){ if(mb.subLeaves[sub]) pushFrom(mb.subLeaves[sub]); }
     else pushFrom(mb.leaves);
@@ -17863,11 +17878,18 @@ window.updateSubTypeFilter = function() {
     // 统计结果只与「分区 + 题库版本」有关，交给 getModuleStatsForBar() 记忆化
     var moduleStats = getModuleStatsForBar();
     // [FIX 2026-11-17] 选项集合改用「全集」，筛到 0 题的模块也保留（数字显示 0）
+    // [FIX 2026-11-24] 全集口径已收紧为「随年份/地区/来源变化」，校验必须用归一化后的名字比，
+    //   否则旧视图里存的 '言语理解' 会被判为不存在而把用户的选择清掉。
     var mkUniverse = getModuleUniverseForBar();
-    if (filterState.module !== 'all' && mkUniverse.indexOf(filterState.module) < 0) {
-      filterState.module = 'all';
-      filterState.subType = 'all';
-      filterState.leafType = 'all';
+    if (filterState.module !== 'all') {
+      var mkNorm = normalizeModuleName(filterState.module);
+      if (mkUniverse.indexOf(mkNorm) < 0) {
+        filterState.module = 'all';
+        filterState.subType = 'all';
+        filterState.leafType = 'all';
+      } else {
+        filterState.module = mkNorm;
+      }
     }
 
     moduleFilter.innerHTML = '<option value="all">全部模块</option>';
