@@ -1447,6 +1447,9 @@ body.skin-dark .search-float-counter { color:#a0aec0; }
 #imgZoom.show { display: flex; }
 #imgZoom img { display: block; margin: auto; flex: 0 0 auto; max-width: none !important; width: auto; height: auto; background: #fff; }
 #imgZoom .img-zoom-tip { position: fixed; left: 0; right: 0; bottom: calc(10px + env(safe-area-inset-bottom)); text-align: center; color: #e2e8f0; font-size: 13px; pointer-events: none; text-shadow: 0 1px 4px rgba(0,0,0,.9); }
+/* [UI 2026-11-24] 关闭按钮：原来只有「点空白关闭」，图铺满屏幕时空白只剩 8px 边框，手指很难点准 */
+#imgZoom .img-zoom-x { position: fixed; top: calc(8px + env(safe-area-inset-top)); right: 10px; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: rgba(255,255,255,.18); color: #fff; font-size: 17px; line-height: 36px; text-align: center; z-index: 2; cursor: pointer; }
+#imgZoom .img-zoom-x:active { background: rgba(255,255,255,.32); }
 /* 自定义确认弹窗（替代原生 confirm）：iOS“添加到主屏幕”独立模式 / 部分 App 内置浏览器会静默禁用
    confirm()/alert()，导致删除文件、清空分区、重置进度、导入备份等依赖 confirm 的操作点不动（函数直接 return）。
    用页面内弹窗可彻底规避该问题。 */
@@ -10712,12 +10715,45 @@ function imgZoomScrollBlocked(ov,sdx,sdy){
   if(sdx<0 && ov.scrollLeft<=0) return true;
   return false;
 }
+// [UI 2026-11-24] 默认「整图可见」。
+//   用户反馈（图形推理）：点开图片后一进来就按原始像素铺开，390px 的手机上左右被裁掉，
+//   看到的是图中间一块，以为图片坏了。原来写成 `max-width:none; width:auto` 就是按 1:1 显示。
+//   现在改成两级：打开时先缩放到「适应屏幕」（长边贴满、短边留白、不放大小图），
+//   点一下图片切到「原始像素」看细节，再点一下回到适应；点空白或右上角 ✕ 关闭。
+var _imgZoomZoomed=false;
+function imgZoomApplyScale(im,ov){
+  if(!im||!ov) return;
+  var nw=im.naturalWidth||0, nh=im.naturalHeight||0;
+  if(!nw||!nh) return;
+  var aw=Math.max(60, ov.clientWidth-16);
+  var ah=Math.max(60, ov.clientHeight-16);
+  var k=_imgZoomZoomed ? 1 : Math.min(1, aw/nw, ah/nh);
+  im.style.width=Math.round(nw*k)+'px';
+  im.style.height=Math.round(nh*k)+'px';
+  var tip=ov.querySelector('.img-zoom-tip');
+  if(tip) tip.textContent=_imgZoomZoomed ? '点图片还原 · 拖动查看细节' : '点图片放大 · 点空白关闭';
+  requestAnimationFrame(function(){
+    ov.scrollTop=0;
+    ov.scrollLeft=Math.max(0, Math.round((ov.scrollWidth-ov.clientWidth)/2));
+  });
+}
+function toggleImgZoomScale(){
+  if(!_imgZoomEl || !_imgZoomEl.classList.contains('show')) return;
+  _imgZoomZoomed=!_imgZoomZoomed;
+  imgZoomApplyScale(_imgZoomEl.querySelector('img'), _imgZoomEl);
+}
 function ensureImgZoom(){
   if(_imgZoomEl && _imgZoomEl.isConnected) return _imgZoomEl;
   var ov=document.createElement('div');
   ov.id='imgZoom';
-  ov.innerHTML='<img alt="图片"><div class="img-zoom-tip">拖动查看 · 点一下关闭</div>';
-  ov.addEventListener('click', function(){ closeImgZoom(); });
+  ov.innerHTML='<button type="button" class="img-zoom-x" aria-label="关闭">✕</button>'
+              +'<img alt="图片"><div class="img-zoom-tip">点图片放大 · 点空白关闭</div>';
+  ov.addEventListener('click', function(e){
+    var t=e.target;
+    if(t && t.closest && t.closest('.img-zoom-x')){ closeImgZoom(); return; }
+    if(t && t.tagName==='IMG'){ toggleImgZoomScale(); return; }   /* 点图：适应 ⇄ 原始 */
+    closeImgZoom();                                              /* 点空白：关闭 */
+  });
   ov.addEventListener('touchstart', function(e){
     if(e.touches && e.touches.length===1){ _imgZoomTouchPt.x=e.touches[0].clientX; _imgZoomTouchPt.y=e.touches[0].clientY; }
   }, { passive:true });
@@ -10731,6 +10767,15 @@ function ensureImgZoom(){
   ov.addEventListener('wheel', function(e){
     if(imgZoomScrollBlocked(ov, e.deltaX||0, e.deltaY||0)) e.preventDefault();
   }, { passive:false });
+  /* 转屏 / 地址栏收起会改变可视高度，按新尺寸重算，避免又变成被裁掉 */
+  window.addEventListener('resize', function(){
+    if(!ov.classList.contains('show')) return;
+    imgZoomApplyScale(ov.querySelector('img'), ov);
+  });
+  window.addEventListener('orientationchange', function(){
+    if(!ov.classList.contains('show')) return;
+    setTimeout(function(){ imgZoomApplyScale(ov.querySelector('img'), ov); }, 260);
+  });
   document.body.appendChild(ov);
   _imgZoomEl=ov;
   return ov;
@@ -10739,14 +10784,18 @@ function openImgZoom(src){
   if(!src) return;
   var ov=ensureImgZoom();
   var im=ov.querySelector('img');
-  im.src=src;
+  _imgZoomZoomed=false;                 /* 每次打开都从「整图可见」开始 */
+  im.style.width='';
+  im.style.height='';
   ov.classList.add('show');
   ov.scrollTop=0; ov.scrollLeft=0;
-  // 图比屏幕宽时，首屏横向居中，避免一进来只看到左边一块
   im.onload=function(){
     if(!ov.classList.contains('show')) return;
-    if(im.offsetWidth > ov.clientWidth) ov.scrollLeft=(im.offsetWidth-ov.clientWidth)/2;
+    imgZoomApplyScale(im,ov);
   };
+  im.src=src;
+  // 缓存命中时 onload 可能早于赋值，这里补一次
+  if(im.complete && im.naturalWidth) imgZoomApplyScale(im,ov);
   // 注意：不要动 documentElement / body 的 overflow。
   // iOS Safari 上在已滚动页面里把 html 设成 overflow:hidden，会伴随一次滚动位置跳变，
   // 表现为「点开图之后页面回到顶部」。改为只给遮罩层 overscroll-behavior:contain，
