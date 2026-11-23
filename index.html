@@ -1129,13 +1129,17 @@ body.ms-zone.pc-mode .filter-bar .sf-multi { display: none !important; }
    交互设计：#yearFilter / #provinceFilter 仍是原生 <select>（九宫格布局、各分区 padding/字号规则
    全部沿用，零布局风险），只把「点击」改成打开下面的复选面板。select 的第 1 项（value=all）
    文本被 JS 改写为「当前选择摘要」，所以外观和原来完全一样。 */
-#yearFilter, #provinceFilter { cursor: pointer; pointer-events: none; }
-/* 原生 select 设为 pointer-events:none，点击会穿透到 .filter-bar，
-   由下面的 JS 按坐标判定 —— 这样 iOS/Android 的原生选择器绝不会弹出来。
-   select 本身仍照常渲染、照常被 JS 赋值，布局/外观零改动。 */
+#yearFilter, #provinceFilter { cursor: pointer; }
+/* [FEATURE 2026-11-24] 筛选栏内**所有**原生 <select> 统一改由自绘 .qf-panel 弹出：
+   此前只有年份 / 地区是自绘面板，模块 / 题型 / 细分 / 做题状态以及申论·综应的
+   动态下拉（slYearFilter 等）都还是原生弹层 —— iOS 等系统在深色外观下把原生弹层
+   画成深灰底白字，和年份 / 地区面板的白底完全两个风格。
+   pointer-events:none 让点击穿透到 .filter-bar，由下面的 JS 按坐标判定该弹哪个面板，
+   原生选择器绝不会再弹出来。select 本身仍照常渲染、照常被 JS 赋值，布局零改动。 */
+#filterBar select { cursor: pointer; pointer-events: none; }
 .qf-panel {
   position: fixed; z-index: 100060; display: none; box-sizing: border-box;
-  /* 宽度 / 高度上限全部由 JS 的 placePanel() 按视口算（手机居中 340、桌面锚定格 300），
+  /* 宽度 / 高度上限全部由 JS 的 qfPlacePanel() 按视口算（手机居中 340、桌面锚定格 300），
      这里不要再写死 max-width，否则手机上的居中宽度会被 300 截断、左右边距变成不对称。 */
   min-width: 200px; max-width: calc(100vw - 16px); overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -15253,6 +15257,46 @@ yearFilter.addEventListener('change', ()=>{ filterState.year=yearFilter.value; c
        第 1 项（value=all）的文本被改写成「当前选择摘要」，外观与原来一致。
    数据：filterState.year / filterState.province 存逗号分隔的集合，'all' 表示不筛选。
    两个维度只有「怎么排序 / 怎么写摘要」不同，其余交互完全共用，故抽成 make(cfg)。 */
+
+/* 面板定位：打开时、以及「高度变了」（软键盘 / 地址栏）时重算，不用重排内容。
+   [UI 2026-11-23] 手机端**水平居中**：原来左侧对齐触发它的那格，年份格与地区格
+   在九宫格里左右不同，于是两个面板左边缘不齐（实测差 9px）、宽窄也不一致。
+   垂直方向仍贴在格子下方展开（下方放不下才翻到上方）—— 不能改成垂直居中：
+   居中会压住同一行的另一个格子，用户想切换面板时点不到它（实测点不动）。
+   [FEATURE 2026-11-24] 抽成函数供年份 / 地区多选面板与模块 / 题型 / 细分 / 状态
+   单选面板共用，保证「风格统一」不只是配色一致，宽度与最大高度也完全一致。 */
+function qfPlacePanel(sel, panel){
+  var r = sel.getBoundingClientRect();
+  var vw = window.innerWidth;
+  var vh = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+  var wide = vw >= 900;                       /* 桌面 / PC 模式：保持贴格子 */
+  var pw = wide
+    ? Math.min(300, Math.max(210, vw - 24))
+    : Math.min(340, Math.max(220, vw - 32));
+  panel.style.width = pw + 'px';
+  var left;
+  if(wide){
+    left = r.left;
+    if(left + pw > vw - 12) left = vw - 12 - pw;
+    if(left < 12) left = 12;
+  }else{
+    left = Math.round((vw - pw) / 2);         /* 手机：左右边距相等 */
+    if(left < 8) left = 8;
+  }
+  var maxH = wide
+    ? Math.min(Math.round(vh * 0.6), 380)
+    : Math.min(Math.round(vh * 0.68), 440);
+  var spaceBelow = vh - 12 - (r.bottom + 6);
+  /* 下方只要放得下 200px 就别翻到上方 —— 翻上去会盖住筛选栏那一行 */
+  if(spaceBelow > 200 && maxH > spaceBelow) maxH = spaceBelow;
+  panel.style.maxHeight = maxH + 'px';
+  var h = Math.min(panel.scrollHeight || maxH, maxH);
+  var top = r.bottom + 6;
+  if(top + h > vh - 12) top = Math.max(12, r.top - h - 6);
+  panel.style.left = Math.round(left) + 'px';
+  panel.style.top  = Math.round(top) + 'px';
+}
+
 (function installMultiPickers(){
   var bar = document.getElementById('filterBar');
   if(!bar) return;
@@ -15374,43 +15418,9 @@ yearFilter.addEventListener('change', ()=>{ filterState.year=yearFilter.value; c
       try{ renderQuestions(); }catch(e){}
     }
 
-    /* 面板定位：打开时、以及「高度变了」（软键盘 / 地址栏）时重算，不用重排内容。
-       [UI 2026-11-23] 手机端改为**水平居中**：
-       原来左侧对齐触发它的那格，年份格与地区格在九宫格里左右不同，
-       于是两个面板左边缘不齐（实测差 9px）、宽窄也不一致，看着不居中。
-       垂直方向仍贴在格子下方展开（下方放不下才翻到上方）—— 不能改成垂直居中：
-       居中会压住同一行的另一个格子，用户想切换面板时点不到它（实测点不动）。 */
-    function placePanel(){
-      var r = sel.getBoundingClientRect();
-      var vw = window.innerWidth;
-      var vh = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
-      var wide = vw >= 900;                       /* 桌面 / PC 模式：保持贴格子 */
-      var pw = wide
-        ? Math.min(300, Math.max(210, vw - 24))
-        : Math.min(340, Math.max(220, vw - 32));
-      panel.style.width = pw + 'px';
-      var left;
-      if(wide){
-        left = r.left;
-        if(left + pw > vw - 12) left = vw - 12 - pw;
-        if(left < 12) left = 12;
-      }else{
-        left = Math.round((vw - pw) / 2);         /* 手机：左右边距相等 */
-        if(left < 8) left = 8;
-      }
-      var maxH = wide
-        ? Math.min(Math.round(vh * 0.6), 380)
-        : Math.min(Math.round(vh * 0.68), 440);
-      var spaceBelow = vh - 12 - (r.bottom + 6);
-      /* 下方只要放得下 200px 就别翻到上方 —— 翻上去会盖住筛选栏那一行 */
-      if(spaceBelow > 200 && maxH > spaceBelow) maxH = spaceBelow;
-      panel.style.maxHeight = maxH + 'px';
-      var h = Math.min(panel.scrollHeight || maxH, maxH);
-      var top = r.bottom + 6;
-      if(top + h > vh - 12) top = Math.max(12, r.top - h - 6);
-      panel.style.left = Math.round(left) + 'px';
-      panel.style.top  = Math.round(top) + 'px';
-    }
+    /* 定位规则统一在 qfPlacePanel()（年份 / 地区 / 模块 / 题型 / 状态共用同一套，
+       改宽度或回弹阈值只改那一处，否则几个面板会各走各的尺寸）。 */
+    function placePanel(){ qfPlacePanel(sel, panel); }
     function openPanel(){
       var r0 = sel.getBoundingClientRect();
       if(!r0.width && !r0.height) return;                       /* 该分区没有这个控件 */
@@ -15524,6 +15534,223 @@ yearFilter.addEventListener('change', ()=>{ filterState.year=yearFilter.value; c
   /* renderAll / 面试重建 / 地区选项重建都会调用这两个入口 */
   window.__qfSync = yearSync || function(){};
   window.__qpSync = provSync || function(){};
+})();
+
+/* ===== [FEATURE 2026-11-24] 筛选栏原生 <select> 统一改用自绘面板 =====
+   问题（用户截图）：点「全部题型」弹出的是**原生**选项列表，深灰底白字，
+       与已经改自绘的年份 / 地区面板（白底 + 圆角 + 同一套阴影）完全是两个风格。
+       根因不是调色，是控件类型不同：原生弹层由系统绘制，外观跟随系统外观设置
+       （iOS 深色外观下就是深灰），页面 CSS 管不到。
+   做法：筛选栏里除年份 / 地区以外的 select（模块 · 题型 · 细分 · 做题状态，
+       以及申论 / 综应动态插入的 sl·zy 四个下拉）全部改用与年份 / 地区**同一个**
+       .qf-panel 组件和同一个 qfPlacePanel() 定位规则 —— 同一份 CSS，宽度、最大高度、
+       圆角、阴影、选中态完全一致，只是行为从「多选」变成「单选」。
+       点一项 = 写入 select.value 并派发 change（各分区原有的 onchange 一行不改，
+       filterState 更新、计数刷新、题目重绘全部照旧），面板随即关闭。
+   数据源仍是原生 select 的 options —— renderAll / updateSubTypeFilter / updateEssaySelects
+       重建选项的代码不用改；select 自身尺寸、字号、九宫格布局也不动。 */
+(function installSelectPickers(){
+  var bar = document.getElementById('filterBar');
+  if(!bar) return;
+  /* 这三个不走本组件：年份 / 地区已有专用多选面板，排序下拉由 .sf-multi-panel 接管 */
+  var SKIP = { yearFilter: 1, provinceFilter: 1, sortFilter: 1 };
+  var INST = {};   /* id -> 面板实例；申论/综应重建 select 后按 id 复用同一个面板 */
+
+  /* 「数学运算 (4998题)」「题干 (30套)」→ {label, count}；括号里不是题量的原样保留 */
+  function parseOptionText(txt){
+    var label = txt, cnt = null;
+    var m = txt.match(/^(.*?)[（(](\d+)\s*(?:题|套|道|篇|个)[）)]$/);
+    if(m){ label = m[1].trim(); cnt = Number(m[2]); }
+    return { label: label, count: cnt };
+  }
+  function selById(id){
+    var el = document.getElementById(id);
+    return (el && el.tagName === 'SELECT') ? el : null;
+  }
+
+  function bind(o, id){
+    var panel = o.panel;
+
+    function render(){
+      var sel = selById(id);
+      if(!sel){ panel.innerHTML = ''; return; }
+      var head = sel.options.length ? String(sel.options[0].textContent || '').trim() : '';
+      if(!head) head = '全部';
+      panel.setAttribute('aria-label', head);
+      var opts = [];
+      for(var i=0;i<sel.options.length;i++){
+        var op = sel.options[i];
+        if(op.value === 'all') continue;
+        var p = parseOptionText(String(op.textContent || '').trim());
+        opts.push({ v: op.value, label: p.label, count: p.count });
+      }
+      /* 头部与年份 / 地区面板同构：两个按钮并排（这里一个是「全部XX」、一个是「关闭」），
+         单选面板选中即生效，没有可「撤销」的暂存状态，所以第二个按钮只负责收起面板。 */
+      var html = '<div class="qf-head">'
+        + '<button type="button" data-act="all">' + escapeHtml(head) + '</button>'
+        + '<button type="button" data-act="close">关闭</button>'
+        + '</div>';
+      if(!opts.length){
+        html += '<div class="qf-empty">当前筛选下没有可选的项</div>';
+      }else{
+        html += opts.map(function(op){
+          var on = (sel.value === op.v);
+          var cnt = (op.count == null) ? '' : '<span class="qf-cnt">' + op.count + '题</span>';
+          return '<div class="qf-opt' + (on ? ' selected' : '') + '" role="option"'
+            + ' aria-selected="' + (on ? 'true' : 'false') + '"'
+            + ' data-v="' + escapeHtml(op.v) + '"><span>' + escapeHtml(op.label) + '</span>' + cnt + '</div>';
+        }).join('');
+      }
+      panel.innerHTML = html;
+      panel.scrollTop = 0;
+    }
+
+    function pick(v){
+      var sel = selById(id);
+      if(!sel){ o.close(); return; }
+      var same = (sel.value === v);
+      try{ sel.value = v; }catch(e){}
+      o.close();
+      if(same) return;   /* 与原生一致：重复选同一项不触发 change，避免白重绘一次 */
+      try{ sel.dispatchEvent(new Event('change', { bubbles: true })); }catch(e){
+        try{ if(typeof sel.onchange === 'function') sel.onchange.call(sel); }catch(e2){}
+      }
+    }
+
+    function open(){
+      var sel = selById(id);
+      if(!sel) return;
+      var r = sel.getBoundingClientRect();
+      if(!r.width && !r.height) return;                        /* 该分区没有这个控件 */
+      if(r.bottom < 0 || r.top > window.innerHeight) return;    /* 控件不在视口就不弹 */
+      render();
+      panel.classList.add('open');
+      o.silentUntil = Date.now() + 400;
+      qfPlacePanel(sel, panel);
+    }
+    function close(){ panel.classList.remove('open'); }
+
+    o.open = open; o.close = close; o.render = render;
+    o.pick = pick; o.id = id;
+
+    panel.addEventListener('click', function(e){
+      e.stopPropagation();
+      var t = e.target.closest ? e.target.closest('[data-act],.qf-opt') : null;
+      if(!t) return;
+      e.preventDefault();
+      var act = t.getAttribute('data-act');
+      if(act === 'close'){ o.close(); return; }
+      pick(act === 'all' ? 'all' : t.getAttribute('data-v'));
+    });
+
+    /* 面板内滑动不能把滚动链交给页面（页面一动 scroll 监听就收面板），与多选面板同处理 */
+    var _touchStartY = 0;
+    panel.addEventListener('touchstart', function(e){
+      if(e.touches.length === 1) _touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+    panel.addEventListener('touchmove', function(e){
+      if(e.touches.length !== 1) return;
+      var y = e.touches[0].clientY;
+      var dy = y - _touchStartY;
+      _touchStartY = y;
+      if(panel.scrollHeight <= panel.clientHeight + 1){ e.preventDefault(); return; }
+      var atTop = panel.scrollTop <= 0;
+      var atBottom = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 1;
+      if((atTop && dy > 0) || (atBottom && dy < 0)) e.preventDefault();
+    }, { passive: false });
+
+    document.addEventListener('pointerdown', function(e){
+      if(!panel.classList.contains('open')) return;
+      if(panel.contains(e.target)) return;
+      var sel = selById(id);
+      if(sel){
+        var r = sel.getBoundingClientRect();
+        if(e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) return;
+      }
+      close();
+    }, true);
+    document.addEventListener('keydown', function(e){ if(e.key === 'Escape') close(); });
+
+    var _lastW = window.innerWidth;
+    window.addEventListener('resize', function(){
+      if(!panel.classList.contains('open')) return;
+      var w = window.innerWidth;
+      var dw = Math.abs(w - _lastW);
+      _lastW = w;
+      if(dw > 2){ close(); return; }
+      if(Date.now() < o.silentUntil) return;
+      var sel = selById(id);
+      if(sel) qfPlacePanel(sel, panel);
+    });
+    window.addEventListener('scroll', function(e){
+      if(!panel.classList.contains('open')) return;
+      var t = e.target;
+      if(t === panel) return;
+      if(t && t.nodeType === 1 && panel.contains(t)) return;
+      if(Date.now() < o.silentUntil) return;
+      close();
+    }, { passive: true, capture: true });
+  }
+
+  function instance(id){
+    if(INST[id]) return INST[id];
+    var panel = document.createElement('div');
+    panel.className = 'qf-panel';
+    panel.id = id + 'Panel';
+    panel.setAttribute('role', 'listbox');
+    document.body.appendChild(panel);
+    var o = { panel: panel, silentUntil: 0 };
+    INST[id] = o;
+    bind(o, id);
+    return o;
+  }
+
+  /* 坐标命中的是哪个受管 select（年份/地区/排序已排除，display:none 的不算） */
+  function hitAnySelect(x, y){
+    var list = bar.querySelectorAll('select');
+    for(var i=0;i<list.length;i++){
+      var s = list[i];
+      if(SKIP[s.id]) continue;
+      var r = s.getBoundingClientRect();
+      if(!r.width && !r.height) continue;
+      if(x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return s;
+    }
+    return null;
+  }
+
+  bar.addEventListener('click', function(e){
+    var sel = hitAnySelect(e.clientX, e.clientY);
+    if(!sel) return;
+    e.preventDefault(); e.stopPropagation();
+    var o = instance(sel.id);
+    if(o.panel.classList.contains('open')) o.close(); else o.open();
+  });
+
+  /* pointer-events:none 不影响键盘聚焦：Tab 到该格后回车/空格/↓ 也能打开 */
+  bar.addEventListener('keydown', function(e){
+    var t = e.target;
+    if(!t || t.tagName !== 'SELECT' || SKIP[t.id]) return;
+    if(e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown'){
+      e.preventDefault();
+      var o = instance(t.id);
+      if(!o.panel.classList.contains('open')) o.open();
+    }
+  });
+
+  /* 选项被重建（换分区 / 级联筛选）时，把开着的面板内容跟一遍，避免显示旧列表 */
+  window.__sfSync = function(){
+    var any = false;
+    for(var id in INST){
+      if(!INST.hasOwnProperty(id)) continue;
+      var o = INST[id];
+      if(!o.panel.classList.contains('open')) continue;
+      o.render();
+      var sel = selById(id);
+      if(sel) qfPlacePanel(sel, o.panel);
+      any = true;
+    }
+    return any;
+  };
 })();
 sourceFilter.addEventListener('focus', ()=>{ renderSourceSuggestions(''); });
 sourceFilter.addEventListener('pointerdown', ()=>{
