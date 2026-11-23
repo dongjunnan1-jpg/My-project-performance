@@ -4877,6 +4877,33 @@ function idbGet(key){
     }catch(e){ res(null); }
   });
 }
+/* [FIX 2026-11-23c] 批量读取：一次只读事务内并发发 N 个 get，只在事务完成后统一结算。
+   为什么要有它：排序用的时间戳（answerTime: / favTime:）原本是「每题一次 idbGet、
+   逐条 await」，错题集上千条时就是上千次事务 + 上千次串行往返，渲染被拖成秒级。
+   这里把 N 次事务压成 1 次，读的仍是同一批 key，语义完全一致（读不到就当没有）。
+   返回 { key: value }，不存在的 key 不会出现在结果里。 */
+function idbGetMany(keys){
+  const list=Array.isArray(keys)?keys:[];
+  const out=Object.create(null);
+  if(!list.length || !_db) return Promise.resolve(out);
+  return new Promise(function(resolve){
+    let settled=false;
+    const finish=function(){ if(settled) return; settled=true; resolve(out); };
+    try{
+      const tx=_db.transaction(IDB_STORE,'readonly');
+      tx.oncomplete=finish;
+      tx.onerror=finish;
+      tx.onabort=finish;
+      const store=tx.objectStore(IDB_STORE);
+      for(let i=0;i<list.length;i++){
+        const key=list[i];
+        if(key===undefined || key===null) continue;
+        const r=store.get(key);
+        r.onsuccess=function(){ if(r.result!==undefined) out[key]=r.result; };
+      }
+    }catch(e){ finish(); }
+  });
+}
 function idbSet(key,val){
   if(!_db){ return Promise.resolve(false); }
   return new Promise(function(res){
@@ -6177,31 +6204,62 @@ async function loadView(){
 async function loadWrong(){ const r=await idbGet('wrong'); if(r) wrongSet=r; ZONE_IDS.forEach(function(z){ if(!wrongSet[z]||typeof wrongSet[z]!=='object') wrongSet[z]={}; }); }
 function saveWrong(){ return idbSet('wrong', wrongSet); }
 
+/* [FEATURE 2026-11-23c] 时间戳统一读写。
+   answerTime:<qid> —— 作答时间，每次作答覆盖（值为最近一次作答时刻）
+   favTime:<qid>    —— 收藏时间，收藏时写入、取消收藏时删除
+   favTime 是本次新增的独立 key：收藏本身存的是 favorites[zone][key]=true（布尔），
+   不改造它的结构是为了让旧备份、旧数据、导入导出全部零迁移；旧收藏没有 favTime，
+   排序时回退到它自己的作答时间，两者都没有才排到末尾。 */
+const ANSWER_TIME_PREFIX='answerTime:';
+const FAV_TIME_PREFIX='favTime:';
 function recordQuestionAnswerTime(q){
   if(!q) return Promise.resolve(false);
   const qid=q._qid||generateQuestionId(q);
   if(!qid) return Promise.resolve(false);
-  return idbSet('answerTime:'+qid,Date.now()).then(function(ok){
+  return idbSet(ANSWER_TIME_PREFIX+qid,Date.now()).then(function(ok){
     if(!ok) console.error('作答时间戳写入失败 qid='+qid);
     return ok;
   });
 }
+function recordFavoriteTime(key,isOn){
+  if(!key) return Promise.resolve(false);
+  if(isOn) return idbSet(FAV_TIME_PREFIX+key,Date.now());
+  return idbDel(FAV_TIME_PREFIX+key);
+}
 async function getAnswerTimeByQid(qid){
   if(!qid) return 0;
-  const value=await idbGet('answerTime:'+qid);
+  const value=await idbGet(ANSWER_TIME_PREFIX+qid);
   return typeof value==='number'&&Number.isFinite(value)?value:0;
 }
-async function getAnswerTimesForQuestions(questions){
-  const result={};
+/* 批量取时间戳：{(qid): timestamp}，缺失记 0。
+   实现要点：① 只开一次事务（idbGetMany）；② qid 每题只算一次，不再进排序比较器重复算。 */
+async function readTimesForQuestions(questions,prefix){
+  const result=Object.create(null);
   const list=Array.isArray(questions)?questions:[];
+  const qids=new Array(list.length);
+  const keys=[];
   for(let i=0;i<list.length;i++){
     const q=list[i];
-    if(!q) continue;
+    if(!q){ qids[i]=''; continue; }
     const qid=q._qid||generateQuestionId(q);
-    if(!qid) continue;
-    result[qid]=await getAnswerTimeByQid(qid);
+    qids[i]=qid||'';
+    if(qid) keys.push(prefix+qid);
+  }
+  if(!keys.length) return result;
+  const map=await idbGetMany(keys);
+  for(let i=0;i<qids.length;i++){
+    const qid=qids[i];
+    if(!qid || qid in result) continue;
+    const v=map[prefix+qid];
+    result[qid]=(typeof v==='number'&&Number.isFinite(v))?v:0;
   }
   return result;
+}
+async function getAnswerTimesForQuestions(questions){
+  return readTimesForQuestions(questions,ANSWER_TIME_PREFIX);
+}
+async function getFavoriteTimesForQuestions(questions){
+  return readTimesForQuestions(questions,FAV_TIME_PREFIX);
 }
 async function removeAnswerTimesForQuestions(questions){
   return removeAnswerTimesForQuestionGroups([Array.isArray(questions)?questions:[]]);
@@ -6409,9 +6467,12 @@ function toggleFavorite(key){
   __favLock[key] = now;
 
   if(!favorites[activeZone]) favorites[activeZone]={};
-  if(favorites[activeZone][key]) delete favorites[activeZone][key];
+  var __favOn = !favorites[activeZone][key];
+  if(!__favOn) delete favorites[activeZone][key];
   else favorites[activeZone][key]=true;
   saveFav();
+  /* [FEATURE 2026-11-23c] 记录/清除收藏时间戳，「⭐只显示收藏」按它倒序 */
+  recordFavoriteTime(key, __favOn);
 
   if(filterState.status === 'favorite'){
     var scrollY = window.scrollY;
@@ -10195,19 +10256,47 @@ function getFiltered(skipSort){
   return qs;
 }
 
+/* ===== [FEATURE 2026-11-23c] 「做过」类状态统一按时间倒序 =====
+   口径（用户 2026-11-23 确认）：
+     · 只显示错题 / 只显示已做 / 只显示做对 → 按【作答时间】由新到旧（最近做的在最前）
+     · ⭐只显示收藏                          → 按【收藏时间】由新到旧；旧收藏无收藏时间戳时
+                                                回退到它自己的作答时间；两者皆无则排末尾
+     · 只显示未做 / 心得 / 有评论            → 仍按默认顺序（年份降 → 卷名 → 卷内题号）
+   不加时间排序的状态不进这条异步路径，保持原来的同步渲染，避免平白多一次 IO。 */
+var RECENCY_STATUS_SET = { wrong:1, answered:1, correct:1, favorite:1 };
+function statusUsesRecencySort(){
+  if(!RECENCY_STATUS_SET[filterState.status]) return false;
+  /* [FIX 2026-11-23c] 用户显式选了「正确率从高到低 / 从低到高」时不得按时间重排。
+     旧实现只对 wrong 做时间排序，且无条件覆盖 getFiltered 的正确率排序 ——
+     选了「只显示错题 + 正确率降序」实际却是时间序，属行为不一致。 */
+  return (filterState.sortBy || 'default') === 'default';
+}
 async function getFilteredWithRecency(skipSort){
   const qs=getFiltered(skipSort);
-  if(skipSort||filterState.status!=='wrong') return qs;
-  const times=await getAnswerTimesForQuestions(qs);
-  qs.sort(function(a,b){
-    const ta=times[a._qid||generateQuestionId(a)]||0;
-    const tb=times[b._qid||generateQuestionId(b)]||0;
-    if(!ta&&tb) return 1;
-    if(ta&&!tb) return -1;
-    if(!ta&&!tb) return 0;
-    return tb-ta;
+  if(skipSort || !statusUsesRecencySort()) return qs;
+  const useFav = filterState.status==='favorite';
+  const times = useFav ? await getFavoriteTimesForQuestions(qs) : await getAnswerTimesForQuestions(qs);
+  const fallback = useFav ? await getAnswerTimesForQuestions(qs) : null;
+  /* 先把 (题目, 时间戳, 原序号) 摊平成数组，再排序：
+     · qid 每题只算一次（旧实现在比较器里每题算 O(N log N) 次 generateQuestionId）
+     · 原序号 i 用作并列时的次序，保证结果稳定、与默认顺序一致 */
+  const rows=new Array(qs.length);
+  for(let i=0;i<qs.length;i++){
+    const q=qs[i];
+    const qid=(q && (q._qid||generateQuestionId(q))) || '';
+    let t=qid ? (times[qid]||0) : 0;
+    if(!t && fallback && qid) t=fallback[qid]||0;
+    rows[i]={ q:q, t:t, i:i };
+  }
+  rows.sort(function(a,b){
+    if(a.t && b.t) return (b.t-a.t) || (a.i-b.i);
+    if(a.t && !b.t) return -1;
+    if(!a.t && b.t) return 1;
+    return 0;
   });
-  return qs;
+  const out=new Array(rows.length);
+  for(let j=0;j<rows.length;j++) out[j]=rows[j].q;
+  return out;
 }
 
 function getOptions(item){
@@ -11797,14 +11886,14 @@ function renderQuestions(){
     ensureZoneView(activeZone).then(function(){ return renderQuestions(); });
     return;
   }
-  if(filterState.status==='wrong'){
+  if(statusUsesRecencySort()){
     const request=++_wrongRecencyRenderGeneration;
     return getFilteredWithRecency().then(function(qs){
-      if(request!==_wrongRecencyRenderGeneration||filterState.status!=='wrong') return;
+      if(request!==_wrongRecencyRenderGeneration||!statusUsesRecencySort()) return;
       filteredQuestions=qs;
       return renderQuestionsAfterFilter();
     }).catch(function(e){
-      console.error('错题作答时间读取失败:',e);
+      console.error('作答/收藏时间读取失败:',e);
       /* [FIX 2026-11-07b] 这条分支失败后不会再有渲染收尾，遮罩要当场撤掉 */
       if(window.qzBusyHide) window.qzBusyHide(activeZone);
     });
