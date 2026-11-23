@@ -1157,8 +1157,17 @@ body.ms-zone.pc-mode .filter-bar .sf-multi { display: none !important; }
   border-radius: 7px; cursor: pointer; }
 .qf-panel .qf-opt { display: flex; align-items: center; gap: 8px; padding: 10px;
   border-radius: 7px; font-size: 13.5px; color: var(--text, #2d3748);
-  cursor: pointer; user-select: none; -webkit-user-select: none; }
-.qf-panel .qf-opt:hover { background: var(--light, #eef4fc); }
+  cursor: pointer; user-select: none; -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent; }
+/* [FIX 2026-11-24] hover 高亮只给「真有鼠标」的设备。
+   手机浏览器（iOS Safari / 安卓）里 :hover 会在手指抬起后**粘住**在最后点过的那一行，
+   于是「点年份 → 点清空」之后，被点过的那行仍是粉色底、看着像还选着（实际已取消）。
+   触屏上改为只靠 .selected 表达选中，按下反馈用 :active。 */
+@media (hover: hover) and (pointer: fine) {
+  .qf-panel .qf-opt:hover { background: var(--light, #eef4fc); }
+  body.skin-dark .qf-panel .qf-opt:hover { background: rgba(255,255,255,.08); }
+}
+.qf-panel .qf-opt:active { background: rgba(0,0,0,.05); }
 .qf-panel .qf-opt.selected { background: var(--light, #eef4fc); color: var(--deep); font-weight: 700; }
 .qf-panel .qf-opt::before { content: ''; display: inline-block; width: 16px; flex: 0 0 16px;
   text-align: center; font-weight: 700; color: var(--main, #5b9bd5); }
@@ -1170,7 +1179,7 @@ body.ms-zone.pc-mode .filter-bar .sf-multi { display: none !important; }
 body.skin-dark .qf-panel { background: var(--surface, #1c2333); border-color: var(--border, #52627a); }
 body.skin-dark .qf-panel .qf-head { background: var(--surface, #1c2333); border-bottom-color: var(--border, #52627a); }
 body.skin-dark .qf-panel .qf-opt { color: var(--text, #e6edf5); }
-body.skin-dark .qf-panel .qf-opt:hover { background: rgba(255,255,255,.08); }
+body.skin-dark .qf-panel .qf-opt.selected { background: rgba(255,255,255,.12); }
 body.skin-dark .qf-panel .qf-head button { background: var(--surface, #1c2333);
   border-color: var(--border, #52627a); color: var(--text, #e6edf5); }
 
@@ -1208,7 +1217,10 @@ body.skin-dark .qf-panel .qf-head button { background: var(--surface, #1c2333);
   color: var(--text, #2d3748); cursor: pointer; user-select: none;
   transition: background .12s ease;
 }
-.sf-opt:hover { background: var(--light, #eef4fc); }
+/* [FIX 2026-11-24] 同 .qf-opt：触屏上 :hover 会粘住，只在有鼠标时高亮 */
+@media (hover: hover) and (pointer: fine) {
+  .sf-opt:hover { background: var(--light, #eef4fc); }
+}
 .sf-opt::before {
   content: ''; display: inline-block; width: 16px; text-align: center;
   font-weight: 700; color: var(--main, #5b9bd5); flex: 0 0 16px;
@@ -1219,7 +1231,9 @@ body.skin-dark .qf-panel .qf-head button { background: var(--surface, #1c2333);
 /* [FIX 20261001b] 暗夜下取消 .sf-multi-btn 的单独覆写：.filter-bar 内其它控件（select / input#sourceFilter / 清除筛选按钮）均为「白底 + --deep 文字 + 1px #ccc 边框」，单独覆写深底浅字会让「默认顺序」成为栏内唯一的深色控件，颜色明显不一致。 */
 body.skin-dark .sf-multi-panel { background: var(--surface, #1c2333); border-color: var(--border, #52627a); }
 body.skin-dark .sf-opt { color: var(--text, #e6edf5); }
-body.skin-dark .sf-opt:hover { background: rgba(255,255,255,.08); }
+@media (hover: hover) and (pointer: fine) {
+  body.skin-dark .sf-opt:hover { background: rgba(255,255,255,.08); }
+}
 body.skin-dark .sf-opt.selected { background: rgba(91,155,213,.22); color: var(--text, #e6edf5); }
 body.skin-dark .sf-group-title { color: var(--text-muted, #a0aec0); }
 .essay-topic-buttons { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
