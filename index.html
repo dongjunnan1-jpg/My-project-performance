@@ -1125,15 +1125,15 @@ body.ms-zone.pc-mode .filter-bar .sf-multi { display: none !important; }
   body.ms-zone .filter-bar button[onclick*="clearFilters"] .sf-clear-ico { display: none !important; }
 }
 
-/* ===== [FEATURE 2026-11-06] 年份多选面板 =====
-   交互设计：#yearFilter 仍是原生 <select>（九宫格布局、各分区 padding/字号规则全部沿用，
-   零布局风险），只把「点击」改成打开下面的复选面板。select 的第 1 项（value=all）
+/* ===== [FEATURE 2026-11-06] 年份多选面板 / [FEATURE 2026-11-23] 地区多选面板 =====
+   交互设计：#yearFilter / #provinceFilter 仍是原生 <select>（九宫格布局、各分区 padding/字号规则
+   全部沿用，零布局风险），只把「点击」改成打开下面的复选面板。select 的第 1 项（value=all）
    文本被 JS 改写为「当前选择摘要」，所以外观和原来完全一样。 */
-#yearFilter { cursor: pointer; pointer-events: none; }
+#yearFilter, #provinceFilter { cursor: pointer; pointer-events: none; }
 /* 原生 select 设为 pointer-events:none，点击会穿透到 .filter-bar，
    由下面的 JS 按坐标判定 —— 这样 iOS/Android 的原生选择器绝不会弹出来。
    select 本身仍照常渲染、照常被 JS 赋值，布局/外观零改动。 */
-#qfPanel {
+.qf-panel {
   position: fixed; z-index: 100060; display: none; box-sizing: border-box;
   min-width: 200px; max-width: 300px; overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -1144,32 +1144,32 @@ body.ms-zone.pc-mode .filter-bar .sf-multi { display: none !important; }
   background: var(--surface, #fff); border: 1px solid var(--border, #dbe7f5);
   border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.18); padding: 6px;
 }
-#qfPanel.open { display: block; }
-#qfPanel .qf-head { display: flex; gap: 6px; padding: 4px 4px 8px; margin-bottom: 4px;
+.qf-panel.open { display: block; }
+.qf-panel .qf-head { display: flex; gap: 6px; padding: 4px 4px 8px; margin-bottom: 4px;
   border-bottom: 1px solid var(--light, #eef2f7);
   /* 年份多的时候列表要滚动，全选/清空必须常驻顶部，不能跟着滚走 */
   position: sticky; top: -6px; z-index: 1;
   background: var(--surface, #fff); }
-#qfPanel .qf-head button { flex: 1 1 0; min-height: 32px; font-size: 12px; font-family: inherit;
+.qf-panel .qf-head button { flex: 1 1 0; min-height: 32px; font-size: 12px; font-family: inherit;
   border: 1px solid var(--border, #dbe7f5); background: var(--surface, #fff); color: var(--deep);
   border-radius: 7px; cursor: pointer; }
-#qfPanel .qf-opt { display: flex; align-items: center; gap: 8px; padding: 10px;
+.qf-panel .qf-opt { display: flex; align-items: center; gap: 8px; padding: 10px;
   border-radius: 7px; font-size: 13.5px; color: var(--text, #2d3748);
   cursor: pointer; user-select: none; -webkit-user-select: none; }
-#qfPanel .qf-opt:hover { background: var(--light, #eef4fc); }
-#qfPanel .qf-opt.selected { background: var(--light, #eef4fc); color: var(--deep); font-weight: 700; }
-#qfPanel .qf-opt::before { content: ''; display: inline-block; width: 16px; flex: 0 0 16px;
+.qf-panel .qf-opt:hover { background: var(--light, #eef4fc); }
+.qf-panel .qf-opt.selected { background: var(--light, #eef4fc); color: var(--deep); font-weight: 700; }
+.qf-panel .qf-opt::before { content: ''; display: inline-block; width: 16px; flex: 0 0 16px;
   text-align: center; font-weight: 700; color: var(--main, #5b9bd5); }
-#qfPanel .qf-opt.selected::before { content: '✓'; }
-#qfPanel .qf-cnt { margin-left: auto; font-size: 11.5px; font-weight: 400;
+.qf-panel .qf-opt.selected::before { content: '✓'; }
+.qf-panel .qf-cnt { margin-left: auto; font-size: 11.5px; font-weight: 400;
   color: var(--text-muted, #5a6b80); white-space: nowrap; }
-#qfPanel .qf-empty { padding: 14px 10px; font-size: 12.5px;
+.qf-panel .qf-empty { padding: 14px 10px; font-size: 12.5px;
   color: var(--text-muted, #5a6b80); text-align: center; }
-body.skin-dark #qfPanel { background: var(--surface, #1c2333); border-color: var(--border, #52627a); }
-body.skin-dark #qfPanel .qf-head { background: var(--surface, #1c2333); border-bottom-color: var(--border, #52627a); }
-body.skin-dark #qfPanel .qf-opt { color: var(--text, #e6edf5); }
-body.skin-dark #qfPanel .qf-opt:hover { background: rgba(255,255,255,.08); }
-body.skin-dark #qfPanel .qf-head button { background: var(--surface, #1c2333);
+body.skin-dark .qf-panel { background: var(--surface, #1c2333); border-color: var(--border, #52627a); }
+body.skin-dark .qf-panel .qf-head { background: var(--surface, #1c2333); border-bottom-color: var(--border, #52627a); }
+body.skin-dark .qf-panel .qf-opt { color: var(--text, #e6edf5); }
+body.skin-dark .qf-panel .qf-opt:hover { background: rgba(255,255,255,.08); }
+body.skin-dark .qf-panel .qf-head button { background: var(--surface, #1c2333);
   border-color: var(--border, #52627a); color: var(--text, #e6edf5); }
 
 /* ===== [FIX 20260930] 排序 + 正确率区间 多选下拉面板 ===== */
@@ -9099,6 +9099,30 @@ function yearSelText(){
   if(names.length === 2) return names[0] + '/' + names[1];   /* 窄格显示得下 */
   return '已选' + names.length + '年';                        /* 格子只有 ~109px，再长就被截断 */
 }
+
+/* ===== [FEATURE 2026-11-23] 地区筛选支持多选 =====
+   与年份完全同一套数据模型：filterState.province 仍是字符串，允许逗号分隔的集合：
+     'all'           → 不筛选
+     '广东'          → 单选（老视图 / 老备份完全兼容）
+     '广东,江苏'     → 多选
+   所有筛选点一律走 provSelList() / provSelHas()，**不要**再与 filterState.province 做相等比较。
+   注意「省考」是聚合项（除国考以外的地方考试题，见 qzProvMatch），可与其他省份共存。 */
+function provSelList(){
+  var v = String(filterState.province==null ? 'all' : filterState.province);
+  if(!v || v==='all') return null;                 /* null = 不筛选 */
+  var arr = v.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+  return arr.length ? arr : null;
+}
+function provSelHas(list, tok){
+  return !!list && list.indexOf(String(tok)) >= 0;
+}
+function provSelText(){
+  var l = provSelList();
+  if(!l) return '全部地区';
+  if(l.length === 1) return l[0];
+  if(l.length === 2) return l[0] + '/' + l[1];     /* 窄格显示得下 */
+  return '已选' + l.length + '个地区';              /* 格子只有 ~109px，再长就被截断 */
+}
 function getFilterBaseQuestions(){
   var sig = filterBaseSignature();
   if(_gfbMemo.sig === sig && _gfbMemo.arr) return _gfbMemo.arr.slice();
@@ -9120,8 +9144,16 @@ function getFilterBaseQuestions(){
       return false;
     });
   }
-  if(filterState.province && filterState.province!=='all'){
-    qs=qs.filter(function(q){ return (activeZone==='sl'||activeZone==='zy') ? (q._paperProvince||q.province||'其他')===filterState.province : qzProvMatch(q, filterState.province); });
+  var _pl = provSelList();                       /* [FEATURE 2026-11-23] 地区可多选 */
+  if(_pl){
+    qs=qs.filter(function(q){
+      if(activeZone==='sl'||activeZone==='zy'){
+        var pv = String(q._paperProvince||q.province||'其他');
+        return _pl.indexOf(pv) >= 0;
+      }
+      for(var i=0;i<_pl.length;i++){ if(qzProvMatch(q, _pl[i])) return true; }
+      return false;
+    });
   }
   // 来源（改为包含匹配，所有分区生效）
   if(filterState.source && filterState.source!=='all'){
@@ -9370,7 +9402,8 @@ function filterEssayQuestions(excludeField){
   function active(field){ return field!==excludeField; }
   var _eyl = yearSelList();
   if(active('year') && _eyl) qs=qs.filter(function(q){ return yearSelHas(_eyl, String(q._paperYear)); });
-  if(active('province')&&filterState.province!=='all') qs=qs.filter(function(q){ return q._paperProvince===filterState.province; });
+  var _epl = provSelList();                     /* [FEATURE 2026-11-23] 地区可多选 */
+  if(active('province') && _epl) qs=qs.filter(function(q){ return _epl.indexOf(String(q._paperProvince||'其他')) >= 0; });
   if(active('subType')&&filterState.subType!=='all') qs=qs.filter(function(q){ return q._paperTopic===filterState.subType; });
   if(active('leafType')&&filterState.leafType!=='all') qs=qs.filter(function(q){ return q.leafCategory===filterState.leafType; });
   return qs;
@@ -9417,8 +9450,17 @@ function updateEssaySelects(){
     var id=field==='year'?p+'YearFilter':field==='province'?p+'ProvinceFilter':field==='subType'?p+'TopicFilter':p+'LeafFilter';
     var element=document.getElementById(id);
     if(!element) return;
-    element.value=current[field];
-    if(element.value!==current[field]){ filterState[field]='all'; element.value='all'; }
+    /* [FIX 2026-11-23] 年份 / 地区可能是多选集合（'A,B'），任何 option.value 都不可能等于它。
+       旧逻辑 `element.value!==current[field]` 在这种情况下会把 filterState 清成 'all'，
+       等于用户从客观题分区切到申论/综应时，选好的多个年份/地区被一次性抹掉。
+       现在：多选时把摘要写进第 1 项，真实选择留在 filterState 里。 */
+    var multi = (field==='year') ? yearSelList() : (field==='province') ? provSelList() : null;
+    if(multi){
+      if(element.options.length) element.options[0].textContent = (field==='year') ? yearSelText() : provSelText();
+      element.value='all';
+    }else if(element.value!==current[field]){
+      filterState[field]='all'; element.value='all';
+    }
     element.onchange=function(){ filterState[field]=this.value; currentPage=1; saveView(); renderAll(); };
   });
   document.getElementById(p+'ClearFilter').onclick=clearFilters;
@@ -9735,6 +9777,10 @@ function setSelectValue(sel, val){ if(!sel) return; if([...sel.options].some(o=>
 function applyFilterStateToUI(){
   setSelectValue(yearFilter, filterState.year);
   if(provinceFilter) setSelectValue(provinceFilter, filterState.province);
+  /* [FEATURE 2026-11-06 / 2026-11-23] 年份与地区改成多选面板后，原生 select 只当
+     「选项数据源」，它的 value 恒为 'all'；摘要文本由面板同步函数写回第 1 项。 */
+  try{ if(window.__qfSync) window.__qfSync(); }catch(e){}
+  try{ if(window.__qpSync) window.__qpSync(); }catch(e){}
   if(sourceFilter) sourceFilter.value=filterState.source==='all'?'':filterState.source;
   setSelectValue(statusFilter, filterState.status);
   // [FIX 20260930 v2] 合并下拉：优先显示 ratioRange（如果设了区间），否则显示 sortBy
@@ -9751,7 +9797,9 @@ function applyFilterStateToUI(){
   /* [FEATURE 2026-11-06] 年份改为多选面板后，隐藏的原生 select 只当「选项数据源」，
      它的 value 恒为 'all'。若照旧无条件回写，会把多选集合覆盖成 all —— 这里加保护。 */
   if(yearFilter && !yearSelList()) filterState.year = yearFilter.value || 'all';
-  if(provinceFilter) filterState.province=provinceFilter.value; if(sourceFilter) filterState.source=sourceFilter.value;
+  /* [FEATURE 2026-11-23] 地区同理：多选时 select.value 恒为 'all'，不能拿来回写 */
+  if(provinceFilter && !provSelList()) filterState.province = provinceFilter.value || 'all';
+  if(sourceFilter) filterState.source=sourceFilter.value;
   if(statusFilter) filterState.status=statusFilter.value;
   // [FIX 20260930] 只在 sortFilter.value 是合法排序值时回写 sortBy，
   // 防止某些边缘场景把区间值写进 sortBy，导致排序失效。
@@ -10113,12 +10161,13 @@ function getFiltered(skipSort){
   let qs=getZoneQuestions(activeZone, '__all__');
   const kw=normalizeSearchText(filterState.search);
   const _fyl=yearSelList();          /* [FEATURE 2026-11-06] 年份可多选 */
+  const _fpl=provSelList();          /* [FEATURE 2026-11-23] 地区可多选 */
 
   if(activeZone==='sl'||activeZone==='zy'){
     // 申论/综应：保持全文搜索（材料 / 题目 / 答案 / 解析）
     if(kw) qs=qs.filter(function(q){ return getZoneSearchText(q).indexOf(kw)>=0; });
     if(_fyl) qs=qs.filter(function(q){ return yearSelHas(_fyl, String(q._paperYear||'')); });
-    if(filterState.province!=='all') qs=qs.filter(function(q){ return (q._paperProvince||'其他')===filterState.province; });
+    if(_fpl) qs=qs.filter(function(q){ return _fpl.indexOf(String(q._paperProvince||'其他')) >= 0; });
     if(filterState.subType!=='all') qs=qs.filter(function(q){ return (q._paperTopic||'其他')===filterState.subType; });
     if(filterState.leafType!=='all') qs=qs.filter(function(q){ return (q.leafCategory||'其他')===filterState.leafType; });
     if(filterState.status==='note'){
@@ -10144,7 +10193,7 @@ function getFiltered(skipSort){
         return n ? yearSelHas(_fyl, String(n)) : false;   /* extractYear 抠不出时返回 0 */
       });
     }
-    if(filterState.province!=='all') qs=qs.filter(function(q){ return (q.region||'其他')===filterState.province; });
+    if(_fpl) qs=qs.filter(function(q){ return _fpl.indexOf(String(q.region||'其他')) >= 0; });
     if(filterState.module!=='all') qs=qs.filter(function(q){ return getSpecialQuestionType(q)===filterState.module; });
     if(filterState.status==='note') qs=qs.filter(function(q){ return getQuestionNoteCount(q._key) > 0; });
     if(filterState.status==='favorite') qs=qs.filter(function(q){ return isFavorite(q._key); });
@@ -10181,8 +10230,12 @@ function getFiltered(skipSort){
   }
 
   // 省份（「省考」为聚合项：除国考以外的地方考试题，见 qzProvMatch）
-  if(filterState.province && filterState.province!=='all'){
-    qs=qs.filter(q=>qzProvMatch(q, filterState.province));
+  // [FEATURE 2026-11-23] 支持多选：命中任意一个所选地区即保留
+  if(_fpl){
+    qs=qs.filter(function(q){
+      for(var i=0;i<_fpl.length;i++){ if(qzProvMatch(q, _fpl[i])) return true; }
+      return false;
+    });
   }
 
   // 来源（改为包含匹配，所有分区生效）
@@ -15111,217 +15164,267 @@ yearFilter.addEventListener('change', ()=>{ filterState.year=yearFilter.value; c
        select 的 options 继续当唯一数据源（renderAll 重建它们时不用改），
        第 1 项（value=all）的文本被改写成「当前选择摘要」，外观与原来一致。
    数据：filterState.year 存逗号分隔的年份集合，'all' 表示不筛选。 */
-(function installYearMultiPicker(){
-  var sel = document.getElementById('yearFilter');
+/* ===== [FEATURE 2026-11-06] 年份多选面板 / [FEATURE 2026-11-23] 地区多选面板 =====
+   需求：年份、地区原来都只能选一个，改为可同时勾选多个。
+   做法：原生 <select> 保持不动（九宫格布局、各分区 padding/字号规则全部沿用，
+       零布局风险），CSS 上设 pointer-events:none，点击穿透到 .filter-bar，
+       这里按坐标判定是否点在该 select 上，是则弹出自绘复选面板。
+       select 的 options 继续当唯一数据源（各处重建它们时不用改），
+       第 1 项（value=all）的文本被改写成「当前选择摘要」，外观与原来一致。
+   数据：filterState.year / filterState.province 存逗号分隔的集合，'all' 表示不筛选。
+   两个维度只有「怎么排序 / 怎么写摘要」不同，其余交互完全共用，故抽成 make(cfg)。 */
+(function installMultiPickers(){
   var bar = document.getElementById('filterBar');
-  if(!sel || !bar) return;
+  if(!bar) return;
 
-  var panel = document.createElement('div');
-  panel.id = 'qfPanel';
-  panel.setAttribute('role','listbox');
-  panel.setAttribute('aria-label','年份（可多选）');
-  panel.setAttribute('aria-multiselectable','true');
-  document.body.appendChild(panel);
-
-  var silentUntil = 0;      /* 此时间点之前发生的 scroll / resize 不关闭面板（自己引起的重排） */
-
-  /* 从原生 select 的 options 读出 {value,label,count}；'all' 不算候选项 */
-  function readOptions(){
-    var out = [];
-    for(var i=0;i<sel.options.length;i++){
-      var o = sel.options[i];
-      if(o.value === 'all') continue;
-      var txt = String(o.textContent || '').trim();
-      var label = txt, cnt = null;
-      var m = txt.match(/^(.*?)[（(](\d+)题[）)]$/);
-      if(m){ label = m[1].trim(); cnt = Number(m[2]); }
-      out.push({ v: o.value, label: label, count: cnt });
+  var YEAR_CFG = {
+    selId: 'yearFilter', panelId: 'qfPanel', aria: '年份（可多选）', fallback: '全部年份',
+    list: function(){ return yearSelList(); },
+    text: function(){ return yearSelText(); },
+    set: function(arr){
+      /* 年份：数字降序，「未标注」垫底，保证摘要与面板顺序稳定 */
+      var a = (arr || []).slice().sort(function(x, y){
+        if(x === '__none__') return 1;
+        if(y === '__none__') return -1;
+        return Number(y) - Number(x);
+      });
+      filterState.year = a.length ? a.join(',') : 'all';
     }
-    return out;
-  }
-
-  /* 集合统一按年份降序（「未标注」垫底），保证摘要与面板顺序稳定 */
-  function setSel(arr){
-    var a = (arr || []).slice().sort(function(x, y){
-      if(x === '__none__') return 1;
-      if(y === '__none__') return -1;
-      return Number(y) - Number(x);
-    });
-    filterState.year = a.length ? a.join(',') : 'all';
-  }
-
-  /* 摘要写回 select 第 1 项，保持与原生控件视觉一致 */
-  function syncLabel(){
-    try{
-      if(sel.options.length) sel.options[0].textContent = yearSelText();
-      sel.value = 'all';
-    }catch(e){}
-  }
-
-  function render(){
-    var keep = panel.scrollTop;           /* 勾选后重建内容，别把滚动位置弹回顶部 */
-    var opts = readOptions();
-    var cur = yearSelList() || [];
-    if(!opts.length){
-      panel.innerHTML = '<div class="qf-empty">当前分区没有可选的年份</div>';
-      syncLabel();
-      return;
-    }
-    var html = '<div class="qf-head">'
-      + '<button type="button" data-act="all">全选</button>'
-      + '<button type="button" data-act="none">清空</button>'
-      + '</div>';
-    html += opts.map(function(o){
-      var on = cur.indexOf(o.v) >= 0;
-      var cnt = (o.count == null) ? '' : '<span class="qf-cnt">' + o.count + '题</span>';
-      return '<div class="qf-opt' + (on ? ' selected' : '') + '" role="option"'
-        + ' aria-selected="' + (on ? 'true' : 'false') + '"'
-        + ' data-v="' + escapeHtml(o.v) + '"><span>' + escapeHtml(o.label) + '</span>' + cnt + '</div>';
-    }).join('');
-    panel.innerHTML = html;
-    if(keep) panel.scrollTop = Math.min(keep, Math.max(0, panel.scrollHeight - panel.clientHeight));
-    syncLabel();
-  }
-
-  function apply(){
-    currentPage = 1;
-    /* 重绘题目列表会让页面高度变化，浏览器自动夹取 scrollY 会打出 scroll 事件；
-       那段滚动不是用户滚的，不能据此收起面板。 */
-    silentUntil = Date.now() + 800;
-    try{ saveView(); }catch(e){}
-    try{ if(typeof refreshFilterCounters === 'function') refreshFilterCounters(); }catch(e){}
-    /* 面试分区：年份 / 地区 / 题型三向级联，改年份要重建另外两个下拉
-       （与原来 yearFilter.onchange 里的 window.updateSubTypeFilter() 一致） */
-    if(typeof activeZone !== 'undefined' && activeZone === 'ms'){
-      try{ if(typeof window.updateSubTypeFilter === 'function') window.updateSubTypeFilter(); }catch(e){}
-    }
-    try{ renderQuestions(); }catch(e){}
-  }
-
-  /* 面板定位抽出来：打开时、以及「高度变了」（软键盘 / 地址栏）时重算，不用重排内容 */
-  function placePanel(){
-    var r = sel.getBoundingClientRect();
-    var vw = window.innerWidth;
-    var vh = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
-    var pw = Math.min(300, Math.max(210, vw - 24));
-    panel.style.width = pw + 'px';
-    var maxH = Math.min(Math.round(vh * 0.6), 380);
-    panel.style.maxHeight = maxH + 'px';
-    var h = Math.min(panel.scrollHeight || maxH, maxH);
-    var left = r.left;
-    if(left + pw > vw - 12) left = vw - 12 - pw;
-    if(left < 12) left = 12;
-    var top = r.bottom + 6;
-    if(top + h > vh - 12) top = Math.max(12, r.top - h - 6);   /* 下方放不下就翻到上方 */
-    panel.style.left = Math.round(left) + 'px';
-    panel.style.top  = Math.round(top) + 'px';
-  }
-  function openPanel(){
-    var r0 = sel.getBoundingClientRect();
-    if(!r0.width && !r0.height) return;                       /* 该分区没有年份控件 */
-    if(r0.bottom < 0 || r0.top > window.innerHeight) return;  /* 年份格不在视口，别弹到屏幕中间 */
-    panel.classList.add('open');
-    silentUntil = Date.now() + 400;      /* 打开瞬间可能伴随重排/夹取滚动，别一开就自关 */
-    render();
-    placePanel();
-  }
-  function closePanel(){ panel.classList.remove('open'); }
-  function togglePanel(){ panel.classList.contains('open') ? closePanel() : openPanel(); }
-
-  /* select 已被 pointer-events:none，点击落在 .filter-bar 上，用坐标判断 */
-  function hitSelect(x, y){
-    var r = sel.getBoundingClientRect();
-    if(!r.width && !r.height) return false;          /* display:none 的分区不算 */
-    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
-  }
-  bar.addEventListener('click', function(e){
-    if(!hitSelect(e.clientX, e.clientY)) return;
-    e.preventDefault(); e.stopPropagation();
-    togglePanel();
-  });
-  /* pointer-events:none 不影响键盘焦点，Tab 到年份格后回车/空格也能打开面板 */
-  sel.addEventListener('keydown', function(e){
-    if(e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown'){
-      e.preventDefault(); openPanel();
-    }
-  });
-
-  panel.addEventListener('click', function(e){
-    e.stopPropagation();
-    var t = e.target.closest ? e.target.closest('[data-act],.qf-opt') : null;
-    if(!t) return;
-    e.preventDefault();
-    var act = t.getAttribute('data-act');
-    if(act){
-      setSel(act === 'all' ? readOptions().map(function(o){ return o.v; }) : []);
-    }else{
-      var v = t.getAttribute('data-v');
-      var cur = yearSelList() || [];
-      var at = cur.indexOf(v);
-      if(at >= 0) cur.splice(at, 1); else cur.push(v);
-      setSel(cur);
-    }
-    render();          /* 面板不自动关闭：可以连续勾多个年份 */
-    apply();
-  });
-
-  /* 面板内部滑动不能被当成「滚了页面」：scroll 不冒泡，但 window 上的 capture 监听
-     照样收得到滚动容器的事件，原先不加判据 —— 手指一滑年份列表，面板立刻消失。
-     内容不溢出时浏览器会把滚动链给页面，这里直接吃掉 touchmove；
-     溢出但滚到顶/底时同理，防止惯性越界带动页面。 */
-  var _touchStartY = 0;
-  panel.addEventListener('touchstart', function(e){
-    if(e.touches.length === 1) _touchStartY = e.touches[0].clientY;
-  }, { passive: true });
-  panel.addEventListener('touchmove', function(e){
-    if(e.touches.length !== 1) return;
-    var y = e.touches[0].clientY;
-    var dy = y - _touchStartY;
-    _touchStartY = y;
-    if(panel.scrollHeight <= panel.clientHeight + 1){ e.preventDefault(); return; }
-    var atTop = panel.scrollTop <= 0;
-    var atBottom = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 1;
-    if((atTop && dy > 0) || (atBottom && dy < 0)) e.preventDefault();
-  }, { passive: false });
-
-  /* 点面板外部关闭：用 pointerdown 捕获阶段，避免被题目卡片等处的 stopPropagation 吞掉
-     （实测 click 冒泡监听在桌面端点外部关不掉）。点年份格本身要放行，交给上面的 toggle。 */
-  document.addEventListener('pointerdown', function(e){
-    if(!panel.classList.contains('open')) return;
-    if(panel.contains(e.target)) return;
-    if(hitSelect(e.clientX, e.clientY)) return;
-    closePanel();
-  }, true);
-  document.addEventListener('keydown', function(e){ if(e.key === 'Escape') closePanel(); });
-
-  /* 只有「宽度变了」（横竖屏 / 窗口缩放）才必须收起；
-     移动端地址栏收放、软键盘弹出只改高度，重贴一下位置就够，收起来纯属捣乱。 */
-  var _lastW = window.innerWidth;
-  window.addEventListener('resize', function(){
-    if(!panel.classList.contains('open')) return;
-    var w = window.innerWidth;
-    var dw = Math.abs(w - _lastW);
-    _lastW = w;
-    if(dw > 2){ closePanel(); return; }
-    if(Date.now() < silentUntil) return;
-    placePanel();
-  });
-
-  /* 页面滚动：面板内滚动一律放行；页面真的滚了就收起（用户是在看别的，不是在勾年份）。 */
-  window.addEventListener('scroll', function(e){
-    if(!panel.classList.contains('open')) return;
-    var t = e.target;
-    if(t === panel) return;
-    if(t && t.nodeType === 1 && panel.contains(t)) return;   /* 面板内的子元素滚动 */
-    if(Date.now() < silentUntil) return;                     /* 自己重排引起的夹取滚动 */
-    closePanel();
-  }, { passive: true, capture: true });
-
-  /* renderAll 会重建 select 的 options（客观题 / 面试两个分区各一处），
-     重建后摘要文本会丢，这里对外暴露一个同步入口，由重建处调用。 */
-  window.__qfSync = function(){
-    if(panel.classList.contains('open')){ render(); placePanel(); } else syncLabel();
   };
+  var PROV_CFG = {
+    selId: 'provinceFilter', panelId: 'qpPanel', aria: '地区（可多选）', fallback: '全部省份',
+    list: function(){ return provSelList(); },
+    text: function(){ return provSelText(); },
+    set: function(arr){
+      /* 地区：按勾选先后存；面板渲染顺序由下拉选项顺序决定，与字符串顺序无关 */
+      var a = arr || [];
+      filterState.province = a.length ? a.join(',') : 'all';
+    }
+  };
+
+  function make(cfg){
+    var sel = document.getElementById(cfg.selId);
+    if(!sel) return null;
+
+    var panel = document.createElement('div');
+    panel.className = 'qf-panel';
+    panel.id = cfg.panelId;
+    panel.setAttribute('role','listbox');
+    panel.setAttribute('aria-label', cfg.aria);
+    panel.setAttribute('aria-multiselectable','true');
+    document.body.appendChild(panel);
+
+    var silentUntil = 0;      /* 此时间点之前发生的 scroll / resize 不关闭面板（自己引起的重排） */
+    /* 空态文案随分区而变（客观题是「全部省份」、面试是「全部地区」）。
+       首次进来先记住原样；options 被重建后按「以『全部』开头」自动更新。 */
+    var EMPTY_LABEL = (sel.options[0] && String(sel.options[0].textContent).trim()) || cfg.fallback;
+
+    /* 从原生 select 的 options 读出 {value,label,count}；'all' 不算候选项 */
+    function readOptions(){
+      var out = [];
+      for(var i=0;i<sel.options.length;i++){
+        var o = sel.options[i];
+        if(o.value === 'all') continue;
+        var txt = String(o.textContent || '').trim();
+        var label = txt, cnt = null;
+        var m = txt.match(/^(.*?)[（(](\d+)题[）)]$/);
+        if(m){ label = m[1].trim(); cnt = Number(m[2]); }
+        out.push({ v: o.value, label: label, count: cnt });
+      }
+      return out;
+    }
+
+    function setSel(arr){ cfg.set(arr); }
+
+    /* 摘要写回 select 第 1 项，保持与原生控件视觉一致 */
+    function syncLabel(){
+      try{
+        if(!sel.options.length) return;
+        var first = sel.options[0];
+        var l = cfg.list();
+        if(l && l.length){
+          var t = cfg.text(l);
+          if(first.textContent !== t) first.textContent = t;
+        }else{
+          var cur = String(first.textContent || '').trim();
+          if(cur && cur.indexOf('全部') !== 0){ first.textContent = EMPTY_LABEL; }  /* 是摘要 → 还原 */
+          else if(cur){ EMPTY_LABEL = cur; }                                        /* 是原始空态 → 记住 */
+        }
+        sel.value = 'all';
+      }catch(e){}
+    }
+
+    function render(){
+      var keep = panel.scrollTop;           /* 勾选后重建内容，别把滚动位置弹回顶部 */
+      var opts = readOptions();
+      var cur = cfg.list() || [];
+      if(!opts.length){
+        panel.innerHTML = '<div class="qf-empty">当前分区没有可选的项</div>';
+        syncLabel();
+        return;
+      }
+      var html = '<div class="qf-head">'
+        + '<button type="button" data-act="all">全选</button>'
+        + '<button type="button" data-act="none">清空</button>'
+        + '</div>';
+      html += opts.map(function(o){
+        var on = cur.indexOf(o.v) >= 0;
+        var cnt = (o.count == null) ? '' : '<span class="qf-cnt">' + o.count + '题</span>';
+        return '<div class="qf-opt' + (on ? ' selected' : '') + '" role="option"'
+          + ' aria-selected="' + (on ? 'true' : 'false') + '"'
+          + ' data-v="' + escapeHtml(o.v) + '"><span>' + escapeHtml(o.label) + '</span>' + cnt + '</div>';
+      }).join('');
+      panel.innerHTML = html;
+      if(keep) panel.scrollTop = Math.min(keep, Math.max(0, panel.scrollHeight - panel.clientHeight));
+      syncLabel();
+    }
+
+    function apply(){
+      currentPage = 1;
+      /* 重绘题目列表会让页面高度变化，浏览器自动夹取 scrollY 会打出 scroll 事件；
+         那段滚动不是用户滚的，不能据此收起面板。 */
+      silentUntil = Date.now() + 800;
+      try{ saveView(); }catch(e){}
+      try{ if(typeof refreshFilterCounters === 'function') refreshFilterCounters(); }catch(e){}
+      /* 面试分区：年份 / 地区 / 题型三向级联，改任一维都要重建另外两个下拉
+         （与原来 yearFilter / provinceFilter.onchange 里的 window.updateSubTypeFilter() 一致） */
+      if(typeof activeZone !== 'undefined' && activeZone === 'ms'){
+        try{ if(typeof window.updateSubTypeFilter === 'function') window.updateSubTypeFilter(); }catch(e){}
+      }
+      try{ renderQuestions(); }catch(e){}
+    }
+
+    /* 面板定位抽出来：打开时、以及「高度变了」（软键盘 / 地址栏）时重算，不用重排内容 */
+    function placePanel(){
+      var r = sel.getBoundingClientRect();
+      var vw = window.innerWidth;
+      var vh = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+      var pw = Math.min(300, Math.max(210, vw - 24));
+      panel.style.width = pw + 'px';
+      var maxH = Math.min(Math.round(vh * 0.6), 380);
+      panel.style.maxHeight = maxH + 'px';
+      var h = Math.min(panel.scrollHeight || maxH, maxH);
+      var left = r.left;
+      if(left + pw > vw - 12) left = vw - 12 - pw;
+      if(left < 12) left = 12;
+      var top = r.bottom + 6;
+      if(top + h > vh - 12) top = Math.max(12, r.top - h - 6);   /* 下方放不下就翻到上方 */
+      panel.style.left = Math.round(left) + 'px';
+      panel.style.top  = Math.round(top) + 'px';
+    }
+    function openPanel(){
+      var r0 = sel.getBoundingClientRect();
+      if(!r0.width && !r0.height) return;                       /* 该分区没有这个控件 */
+      if(r0.bottom < 0 || r0.top > window.innerHeight) return;  /* 控件不在视口，别弹到屏幕中间 */
+      panel.classList.add('open');
+      silentUntil = Date.now() + 400;      /* 打开瞬间可能伴随重排/夹取滚动，别一开就自关 */
+      render();
+      placePanel();
+    }
+    function closePanel(){ panel.classList.remove('open'); }
+    function togglePanel(){ panel.classList.contains('open') ? closePanel() : openPanel(); }
+
+    /* select 已被 pointer-events:none，点击落在 .filter-bar 上，用坐标判断 */
+    function hitSelect(x, y){
+      var r = sel.getBoundingClientRect();
+      if(!r.width && !r.height) return false;          /* display:none 的分区不算 */
+      return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    }
+    bar.addEventListener('click', function(e){
+      if(!hitSelect(e.clientX, e.clientY)) return;
+      e.preventDefault(); e.stopPropagation();
+      togglePanel();
+    });
+    /* pointer-events:none 不影响键盘焦点，Tab 到该格后回车/空格也能打开面板 */
+    sel.addEventListener('keydown', function(e){
+      if(e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown'){
+        e.preventDefault(); openPanel();
+      }
+    });
+
+    panel.addEventListener('click', function(e){
+      e.stopPropagation();
+      var t = e.target.closest ? e.target.closest('[data-act],.qf-opt') : null;
+      if(!t) return;
+      e.preventDefault();
+      var act = t.getAttribute('data-act');
+      if(act){
+        setSel(act === 'all' ? readOptions().map(function(o){ return o.v; }) : []);
+      }else{
+        var v = t.getAttribute('data-v');
+        var cur = (cfg.list() || []).slice();
+        var at = cur.indexOf(v);
+        if(at >= 0) cur.splice(at, 1); else cur.push(v);
+        setSel(cur);
+      }
+      render();          /* 面板不自动关闭：可以连续勾多个 */
+      apply();
+    });
+
+    /* 面板内部滑动不能被当成「滚了页面」：scroll 不冒泡，但 window 上的 capture 监听
+       照样收得到滚动容器的事件，原先不加判据 —— 手指一滑列表，面板立刻消失。
+       内容不溢出时浏览器会把滚动链给页面，这里直接吃掉 touchmove；
+       溢出但滚到顶/底时同理，防止惯性越界带动页面。 */
+    var _touchStartY = 0;
+    panel.addEventListener('touchstart', function(e){
+      if(e.touches.length === 1) _touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+    panel.addEventListener('touchmove', function(e){
+      if(e.touches.length !== 1) return;
+      var y = e.touches[0].clientY;
+      var dy = y - _touchStartY;
+      _touchStartY = y;
+      if(panel.scrollHeight <= panel.clientHeight + 1){ e.preventDefault(); return; }
+      var atTop = panel.scrollTop <= 0;
+      var atBottom = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 1;
+      if((atTop && dy > 0) || (atBottom && dy < 0)) e.preventDefault();
+    }, { passive: false });
+
+    /* 点面板外部关闭：用 pointerdown 捕获阶段，避免被题目卡片等处的 stopPropagation 吞掉
+       （实测 click 冒泡监听在桌面端点外部关不掉）。点该格本身要放行，交给上面的 toggle。
+       两个面板各自注册一个：点年份格时地区面板会在这里被关掉，反之亦然。 */
+    document.addEventListener('pointerdown', function(e){
+      if(!panel.classList.contains('open')) return;
+      if(panel.contains(e.target)) return;
+      if(hitSelect(e.clientX, e.clientY)) return;
+      closePanel();
+    }, true);
+    document.addEventListener('keydown', function(e){ if(e.key === 'Escape') closePanel(); });
+
+    /* 只有「宽度变了」（横竖屏 / 窗口缩放）才必须收起；
+       移动端地址栏收放、软键盘弹出只改高度，重贴一下位置就够，收起来纯属捣乱。 */
+    var _lastW = window.innerWidth;
+    window.addEventListener('resize', function(){
+      if(!panel.classList.contains('open')) return;
+      var w = window.innerWidth;
+      var dw = Math.abs(w - _lastW);
+      _lastW = w;
+      if(dw > 2){ closePanel(); return; }
+      if(Date.now() < silentUntil) return;
+      placePanel();
+    });
+
+    /* 页面滚动：面板内滚动一律放行；页面真的滚了就收起（用户是在看别的，不是在勾选项）。 */
+    window.addEventListener('scroll', function(e){
+      if(!panel.classList.contains('open')) return;
+      var t = e.target;
+      if(t === panel) return;
+      if(t && t.nodeType === 1 && panel.contains(t)) return;   /* 面板内的子元素滚动 */
+      if(Date.now() < silentUntil) return;                     /* 自己重排引起的夹取滚动 */
+      closePanel();
+    }, { passive: true, capture: true });
+
+    /* 各处重建 select 的 options 后摘要文本会丢，返回一个同步入口给重建处调用 */
+    return function sync(){
+      if(panel.classList.contains('open')){ render(); placePanel(); } else syncLabel();
+    };
+  }
+
+  var yearSync = make(YEAR_CFG);
+  var provSync = make(PROV_CFG);
+  /* renderAll / 面试重建 / 地区选项重建都会调用这两个入口 */
+  window.__qfSync = yearSync || function(){};
+  window.__qpSync = provSync || function(){};
 })();
 sourceFilter.addEventListener('focus', ()=>{ renderSourceSuggestions(''); });
 sourceFilter.addEventListener('pointerdown', ()=>{
@@ -17514,11 +17617,12 @@ window.updateSubTypeFilter = function() {
     var collectMsStats=function(self){
       var ys={}, rs={}, ts={};
       var yl=yearSelList();                     /* [FEATURE 2026-11-06] 年份可多选 */
+      var pl=provSelList();                     /* [FEATURE 2026-11-23] 地区可多选 */
       for(var i=0;i<specialQs.length;i++){
         var q=specialQs[i];
         var y=msYearOf(q), r=msRegionOf(q), t=getSpecialQuestionType(q);
         if(self!=='year' && yl && !yearSelHas(yl, y)) continue;
-        if(self!=='province' && filterState.province!=='all' && r!==filterState.province) continue;
+        if(self!=='province' && pl && pl.indexOf(r) < 0) continue;
         if(self!=='type' && filterState.module!=='all' && t!==filterState.module) continue;
         if(y) ys[y]=(ys[y]||0)+1;
         rs[r]=(rs[r]||0)+1;
@@ -17536,7 +17640,12 @@ window.updateSubTypeFilter = function() {
         var _kept=_ylFix.filter(function(t){ return all.years[t]; });
         if(_kept.length!==_ylFix.length){ filterState.year = _kept.length ? _kept.join(',') : 'all'; fixed=true; }
       }
-      if(filterState.province!=='all' && !all.regions[filterState.province]){ filterState.province='all'; fixed=true; }
+      /* [FEATURE 2026-11-23] 多选地区：逐个剔除已失效的地区，全部失效才退回「全部」 */
+      var _plFix=provSelList();
+      if(_plFix){
+        var _pKept=_plFix.filter(function(t){ return all.regions[t]; });
+        if(_pKept.length!==_plFix.length){ filterState.province = _pKept.length ? _pKept.join(',') : 'all'; fixed=true; }
+      }
       if(filterState.module!=='all' && !all.types[filterState.module]){ filterState.module='all'; fixed=true; }
       if(!fixed) break;
     }
@@ -17562,6 +17671,8 @@ window.updateSubTypeFilter = function() {
     setSelectValue(yearFilter,filterState.year);
     setSelectValue(provinceFilter,filterState.province);
     setSelectValue(moduleFilter,filterState.module);
+    /* [FEATURE 2026-11-23] 地区下拉重建后同样要把多选摘要同步回第 1 项 */
+    if(typeof window.__qpSync === 'function') window.__qpSync();
     searchBox.placeholder='🔍 搜索题干、来源、材料或解析...';
     // 三个下拉互相影响，改任意一个都要重建另外两个的选项
     yearFilter.onchange=function(){ filterState.year=this.value; currentPage=1; saveView(); window.updateSubTypeFilter(); renderQuestions(); };
@@ -18014,13 +18125,23 @@ function ensureObjectiveProvinceOptions(){
     var v = select.options[i].value;
     if(v !== 'all') cur.push(v);
   }
-  var keep = filterState.province || 'all';
-  if(keep !== 'all' && want.indexOf(keep) < 0){ keep = 'all'; filterState.province = 'all'; }
+  /* [FEATURE 2026-11-23] 多选地区：逐个剔除本分区不存在的项（如 sy 选了「国考」再切回来） */
+  var _pl = provSelList();
+  if(_pl){
+    var _kept = _pl.filter(function(p){ return want.indexOf(p) >= 0; });
+    if(_kept.length !== _pl.length) filterState.province = _kept.length ? _kept.join(',') : 'all';
+  }
   var same = (cur.length === want.length);
   for(var j = 0; same && j < want.length; j++){ if(cur[j] !== want[j]) same = false; }
-  if(same) return;
+  if(same){
+    /* 选项集合没变，也可能刚被别处重建过（第 1 项文本被重置）→ 摘要补一次 */
+    try{ if(window.__qpSync) window.__qpSync(); }catch(e){}
+    return;
+  }
   buildObjectiveProvinceOptions(select);
-  setSelectValue(select, keep);
+  setSelectValue(select, 'all');
+  /* 面板接管后 select.value 恒为 'all'，真实选择由摘要文本呈现 */
+  try{ if(window.__qpSync) window.__qpSync(); }catch(e){}
 }
 // 只改选项文字里的数字，不动选项集合（答题 / 改其它筛选时不重建下拉，避免闪一下）
 function refreshProvinceOptions(){
