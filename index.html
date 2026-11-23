@@ -11534,8 +11534,21 @@ function stripHtml(html){
   return (wrapper.textContent||'').replace(/\s+/g,' ').trim();
 }
 
+/* [FIX 2026-11-23d] 只在「确实有语音在播/排队」时才 cancel。
+   iOS / 微信 WebView 下，speechSynthesis.cancel() 即便队列是空的，
+   也会初始化系统 TTS 引擎并把音频会话抢过来 —— 表现就是后台音乐顿一下。
+   本函数是本页所有「顺手停一下语音」动作的统一入口。 */
+function cancelSpeechIfBusy(){
+  var ss=window.speechSynthesis;
+  if(!ss) return;
+  var busy=false;
+  try{ busy=!!(ss.speaking||ss.pending||ss.paused); }catch(e){ busy=true; }
+  if(!busy) return;
+  try{ ss.cancel(); }catch(e){}
+}
 function stopSpeaking(){
-  if(window.speechSynthesis) window.speechSynthesis.cancel();
+  if(speakingKey){ try{ if(window.speechSynthesis) window.speechSynthesis.cancel(); }catch(e){} }
+  else cancelSpeechIfBusy();
   document.querySelectorAll('.q-speak-btn.speaking').forEach(function(button){
     button.classList.remove('speaking');
     button.setAttribute('aria-pressed','false');
@@ -24943,7 +24956,7 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
   function voiceStop(){
     playToken++;                                // 作废所有在途异步
     if(streamCtrl){ try{ streamCtrl.abort(); }catch(e){} streamCtrl = null; }   // 掐断在途的流式请求
-    try{ if(window.speechSynthesis) window.speechSynthesis.cancel(); }catch(e){}
+    try{ cancelSpeechIfBusy(); }catch(e){}   /* [FIX 2026-11-23d] 空队列时不碰 TTS，免得抢音频焦点 */
     releaseAudio();
     voiceState.key = null; voiceState.text = ''; voiceState.source = '';
     voiceState.status = 'idle'; voiceState.utterance = null; voiceState.speaker = null;
@@ -26642,12 +26655,16 @@ console.log('✅ 增量补丁已加载（判断题 + 素材库 + 区间下拉）
     installAIProviderGuard();
     installClickDelegate();          // 讲解按钮的点击入口（document 捕获委托，一次安装永久有效）
     scan();
-    // 第一次触摸就解锁播放权限（不必等点到 🎧 那一下）——手势越早用掉越稳，
-    // 代价只是无声地播 0.35 秒静音，用户完全听不到。
-    try{
-      document.addEventListener('pointerdown', function(){ unlockAudio(); }, { once:true, capture:true, passive:true });
-      document.addEventListener('touchstart', function(){ unlockAudio(); }, { once:true, capture:true, passive:true });
-    }catch(e){}
+    /* [FIX 2026-11-23d] 取消「首次触摸就全局解锁播放权限」。
+       原来这里挂了一次性 pointerdown / touchstart 监听，第一次触摸页面任意位置就调
+       unlockAudio() —— 它会 new Audio()、把 src 换成 0.35 秒静音 WAV、再 play()，
+       还会把 navigator.audioSession.type 切成 playback（非混音类别）。
+       代价是：用户一打开本程序、随便点一下，系统音频焦点就被本页抢走，
+       后台正在放的音乐/播客会**暂停一下**（用户 2026-11-23 反馈的现象）。
+       现在改成「真正要用语音时再解锁」：onVoiceClick 第一行已经在手势同步栈里调
+       unlockAudio()，语义完全不变（合成回来的 audio.play() 仍被放行），
+       只是不再替没用语音的用户白抢一次音频焦点。
+       注：不要在别处恢复全局预热 —— 这就是该问题的成因。 */
     var content = document.getElementById('content');
     if(content && window.MutationObserver){
       new MutationObserver(function(){ scheduleScan(); }).observe(content, { childList:true, subtree:true });
