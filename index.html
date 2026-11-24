@@ -10348,45 +10348,87 @@ function getFiltered(skipSort){
 }
 
 /* ===== [FEATURE 2026-11-23c] 「做过」类状态统一按时间倒序 =====
-   口径（用户 2026-11-23 确认）：
+   口径（用户 2026-11-23 确认，2026-11-24 扩到「全部状态」）：
      · 只显示错题 / 只显示已做 / 只显示做对 → 按【作答时间】由新到旧（最近做的在最前）
      · ⭐只显示收藏                          → 按【收藏时间】由新到旧；旧收藏无收藏时间戳时
                                                 回退到它自己的作答时间；两者皆无则排末尾
-     · 只显示未做 / 心得 / 有评论            → 仍按默认顺序（年份降 → 卷名 → 卷内题号）
-   不加时间排序的状态不进这条异步路径，保持原来的同步渲染，避免平白多一次 IO。 */
+     · 全部状态（[FEATURE 2026-11-24]）      → 做过的题按作答时间由新到旧排在前面，
+                                                没做过的题保持默认顺序（年份降 → 卷名 → 题号）垫后
+     · 只显示未做 / 心得 / 有评论            → 仍按默认顺序（都没做过，时间无从比较）
+   用户显式选了正确率排序时以上一律不生效。 */
 var RECENCY_STATUS_SET = { wrong:1, answered:1, correct:1, favorite:1 };
 function statusUsesRecencySort(){
-  if(!RECENCY_STATUS_SET[filterState.status]) return false;
+  var st=filterState.status;
+  /* [FEATURE 2026-11-24] 「全部状态」也走时间序：整分区里做过的题按最近作答时间排在前面。 */
+  var wantAll=(st==='all');
+  if(!RECENCY_STATUS_SET[st] && !wantAll) return false;
+  /* 申论 / 综应 / 面试没有「作答」概念（这三个分区的状态下拉本来就是隐藏的），
+     all 状态若也进这条异步路径，只会为整分区白跑一趟 IDB。 */
+  if(wantAll && (activeZone==='sl' || activeZone==='zy' || activeZone==='ms')) return false;
   /* [FIX 2026-11-23c] 用户显式选了「正确率从高到低 / 从低到高」时不得按时间重排。
      旧实现只对 wrong 做时间排序，且无条件覆盖 getFiltered 的正确率排序 ——
      选了「只显示错题 + 正确率降序」实际却是时间序，属行为不一致。 */
   return (filterState.sortBy || 'default') === 'default';
 }
+/* 分批读时间戳：一次 idbGetMany 里塞几千个 get 已经够用，再多会把单事务的请求队列撑长。
+   各批串行，总成本只跟「做过的题数」有关，与分区总题数无关。 */
+var RECENCY_READ_CHUNK = 4000;
+async function _readRecencyTimes(list, useFav, into){
+  for(let s=0;s<list.length;s+=RECENCY_READ_CHUNK){
+    const part=list.slice(s,s+RECENCY_READ_CHUNK);
+    const map=useFav ? await getFavoriteTimesForQuestions(part) : await getAnswerTimesForQuestions(part);
+    for(const k in map) into[k]=map[k];
+  }
+  return into;
+}
 async function getFilteredWithRecency(skipSort){
   const qs=getFiltered(skipSort);
   if(skipSort || !statusUsesRecencySort()) return qs;
-  const useFav = filterState.status==='favorite';
-  const times = useFav ? await getFavoriteTimesForQuestions(qs) : await getAnswerTimesForQuestions(qs);
-  const fallback = useFav ? await getAnswerTimesForQuestions(qs) : null;
-  /* 先把 (题目, 时间戳, 原序号) 摊平成数组，再排序：
-     · qid 每题只算一次（旧实现在比较器里每题算 O(N log N) 次 generateQuestionId）
-     · 原序号 i 用作并列时的次序，保证结果稳定、与默认顺序一致 */
-  const rows=new Array(qs.length);
+  const st=filterState.status;
+  const wantAll=(st==='all');
+  const useFav=(st==='favorite');
+
+  /* 拆成两拨：
+     · done = 参加时间排序的题（非 all 状态就是筛选结果本身；all 只取「做过」的）
+     · rest = 全部状态下没做过的题，保持默认顺序原样垫在最后
+     all 状态是整分区，若对每道题都算 qid 再发一次 get，首屏会平白多出几万次开销；
+     只对做过的题动手，成本就跟「做过的题数」挂钩。 */
+  const done=[], rest=[];
   for(let i=0;i<qs.length;i++){
     const q=qs[i];
-    const qid=(q && (q._qid||generateQuestionId(q))) || '';
-    let t=qid ? (times[qid]||0) : 0;
-    if(!t && fallback && qid) t=fallback[qid]||0;
-    rows[i]={ q:q, t:t, i:i };
+    if(wantAll && !(q && q._answered!==undefined && q._answered!==null)){ rest.push(q); continue; }
+    done.push({ q:q, i:i, t:0 });
   }
-  rows.sort(function(a,b){
+  if(!done.length) return qs;             /* 一题都没做过：保持默认顺序，连 IDB 都不用开 */
+
+  const target=new Array(done.length);
+  for(let j=0;j<done.length;j++) target[j]=done[j].q;
+  const times=Object.create(null);
+  await _readRecencyTimes(target, useFav, times);
+  const fallback=Object.create(null);
+  if(useFav) await _readRecencyTimes(target, false, fallback);
+  /* qid 每题只算一次，并写回题目对象做缓存（_qid 本就是「题目唯一 ID」字段，
+     导入 / 备份路径也照样赋它），翻页、切筛选时不必重复哈希。 */
+  for(let j=0;j<done.length;j++){
+    const q=done[j].q;
+    let qid=(q && q._qid) || '';
+    if(!qid && q){ qid=generateQuestionId(q); try{ q._qid=qid; }catch(e){} }
+    let t=qid ? (times[qid]||0) : 0;
+    if(!t && useFav && qid) t=fallback[qid]||0;
+    done[j].t=t;
+  }
+  /* 排序键（时间戳降 → 原序号升）：
+     · 原序号做并列次序 —— 同一毫秒或都无时间戳时保持默认顺序，且不依赖 sort 是否稳定
+     · 「做过但没有 answerTime」的老数据排在有时间戳的后面，但仍早于没做过的 rest */
+  done.sort(function(a,b){
     if(a.t && b.t) return (b.t-a.t) || (a.i-b.i);
     if(a.t && !b.t) return -1;
     if(!a.t && b.t) return 1;
-    return 0;
+    return a.i-b.i;
   });
-  const out=new Array(rows.length);
-  for(let j=0;j<rows.length;j++) out[j]=rows[j].q;
+  const out=new Array(done.length+rest.length);
+  for(let j=0;j<done.length;j++) out[j]=done[j].q;
+  for(let k=0;k<rest.length;k++) out[done.length+k]=rest[k];
   return out;
 }
 
